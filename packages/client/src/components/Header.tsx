@@ -22,6 +22,7 @@ interface HeaderProps {
   deviceName: string;
   activeTab: 'transfer' | 'instructions';
   onTabChange: (tab: 'transfer' | 'instructions') => void;
+  wsStatus?: 'connected' | 'connecting' | 'disconnected';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   deviceName,
   activeTab,
   onTabChange,
+  wsStatus = 'connected',
 }) => {
   return (
     <header className="w-full max-w-5xl mx-auto pt-6 px-4 mb-6 relative z-10 animate-pop">
@@ -76,6 +78,19 @@ export const Header: React.FC<HeaderProps> = ({
                     <span className="text-[#60A5FA] font-bold uppercase">P2P Online</span>
                   </>
                 )}
+              </span>
+              <span className="text-slate-600">•</span>
+              <span className={`inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                wsStatus === 'connected'
+                  ? 'bg-emerald-950/80 border-emerald-500/60 text-[#00F59B]'
+                  : wsStatus === 'connecting'
+                  ? 'bg-amber-950/80 border-amber-500/60 text-amber-300 animate-pulse'
+                  : 'bg-rose-950/80 border-rose-500/60 text-rose-300'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  wsStatus === 'connected' ? 'bg-[#00F59B]' : wsStatus === 'connecting' ? 'bg-amber-400' : 'bg-rose-500'
+                }`} />
+                {wsStatus === 'connected' ? 'Server Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'}
               </span>
             </div>
           </div>

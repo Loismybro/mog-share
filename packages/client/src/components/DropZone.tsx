@@ -7,7 +7,8 @@ import {
   Film, 
   Archive, 
   X, 
-  Send 
+  Send,
+  AlertCircle
 } from 'lucide-react';
 import { formatBytes } from '../utils/formatters';
 import { sound } from '../utils/audio';
@@ -169,6 +170,16 @@ export const DropZone: React.FC<DropZoneProps> = ({
               ))}
             </div>
 
+            {/* Guidance banner when files are queued without a target */}
+            {!targetDevice && files.length > 0 && (
+              <div className="mt-3 p-3 rounded-xl bg-amber-950/70 border-2 border-amber-500/70 text-amber-200 text-xs flex items-start sm:items-center gap-2.5 shadow-[2px_2px_0px_#000]">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+                <span className="font-mono text-[11px] leading-relaxed">
+                  <strong className="text-white">Waiting for recipient:</strong> Open MOG-SHARE on another device (or in another browser tab) and click its card above to send.
+                </span>
+              </div>
+            )}
+
             {/* Send CTA */}
             <div className="mt-4 pt-3 border-t-2 border-[#2a324b] flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="text-xs font-bold text-slate-300">
@@ -179,7 +190,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                   </span>
                 ) : (
                   <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-amber-400 ml-1 inline-block">
-                    Select Target Peer
+                    Select A Target Above
                   </span>
                 )}
               </div>
@@ -188,10 +199,20 @@ export const DropZone: React.FC<DropZoneProps> = ({
                 type="button"
                 onClick={onSend}
                 disabled={!targetDevice || isTransferring}
-                className="neo-btn neo-btn-mint w-full sm:w-auto px-6 py-3 text-xs font-black uppercase text-black disabled:opacity-40"
+                className={`neo-btn w-full sm:w-auto px-6 py-3 text-xs font-black uppercase text-black ${
+                  targetDevice && !isTransferring
+                    ? 'neo-btn-mint cursor-pointer shadow-[3px_3px_0px_#000]'
+                    : 'bg-zinc-700 text-zinc-400 opacity-60 cursor-not-allowed'
+                }`}
               >
                 <Send className="w-4 h-4 stroke-[3]" />
-                <span>{isTransferring ? 'Transferring...' : 'Send Files Now'}</span>
+                <span>
+                  {!targetDevice
+                    ? 'Select Target Above To Send'
+                    : isTransferring
+                    ? 'Transferring...'
+                    : 'Send Files Now'}
+                </span>
               </button>
             </div>
           </div>

@@ -24,27 +24,42 @@ function detectDefaultDevice(): { name: string; platform: Platform } {
     if (/pixel/.test(ua)) return { name: 'Google Pixel', platform: 'android' };
     return { name: 'Android Device', platform: 'android' };
   }
-  if (/macintosh|mac os x/.test(ua)) return { name: 'MacBook', platform: 'macos' };
-  if (/windows/.test(ua)) return { name: 'Windows PC', platform: 'windows' };
-  if (/linux/.test(ua)) return { name: 'Linux Desktop', platform: 'linux' };
-  return { name: 'Web Browser', platform: 'macos' };
+  const tabSuffix = Math.floor(100 + Math.random() * 900);
+  if (/macintosh|mac os x/.test(ua)) return { name: `MacBook (${tabSuffix})`, platform: 'macos' };
+  if (/windows/.test(ua)) return { name: `Windows PC (${tabSuffix})`, platform: 'windows' };
+  if (/linux/.test(ua)) return { name: `Linux Desktop (${tabSuffix})`, platform: 'linux' };
+  return { name: `Browser (${tabSuffix})`, platform: 'macos' };
 }
 
 function getPersistentDeviceId(): string {
-  let id = localStorage.getItem('mog_device_id');
+  // Use sessionStorage so multiple tabs in the same browser have unique device IDs for instant multi-tab testing
+  let id = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mog_device_id') : null;
   if (!id) {
     id = 'mog_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
-    localStorage.setItem('mog_device_id', id);
+    try {
+      sessionStorage.setItem('mog_device_id', id);
+    } catch {
+      // Storage fallback
+    }
   }
   return id;
 }
 
 export function App() {
   const [deviceName, setDeviceName] = useState(() => {
-    const saved = localStorage.getItem('mog_device_name');
-    if (saved && saved !== "Alex's MacBook Pro") return saved;
-    return detectDefaultDevice().name;
+    const sessionSaved = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mog_device_name') : null;
+    if (sessionSaved) return sessionSaved;
+    const localSaved = typeof localStorage !== 'undefined' ? localStorage.getItem('mog_device_name') : null;
+    if (localSaved && localSaved !== "Alex's MacBook Pro" && !localSaved.includes('(')) {
+      return localSaved;
+    }
+    const defName = detectDefaultDevice().name;
+    try {
+      sessionStorage.setItem('mog_device_name', defName);
+    } catch {}
+    return defName;
   });
+  const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting');
   const [platform, setPlatform] = useState<Platform>(() => {
     const saved = localStorage.getItem('mog_platform') as Platform;
     if (saved) return saved;
@@ -156,12 +171,14 @@ export function App() {
 
     const wsUrl = customWs ? customWs : `${protocol}//${window.location.host}/ws`;
 
+    setWsStatus('connecting');
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
         console.log('[MOG-SHARE] WebSocket Connected');
+        setWsStatus('connected');
         reconnectAttemptsRef.current = 0;
 
         // 1. Register persistent device ID
@@ -433,6 +450,7 @@ export function App() {
 
       ws.onclose = () => {
         console.warn('[MOG-SHARE] WebSocket Closed. Scheduling reconnect...');
+        setWsStatus('disconnected');
         wsRef.current = null;
         const delay = Math.min(5000, 500 * Math.pow(1.5, reconnectAttemptsRef.current));
         reconnectAttemptsRef.current++;
@@ -442,10 +460,11 @@ export function App() {
       };
 
       ws.onerror = () => {
+        setWsStatus('disconnected');
         if (wsRef.current) wsRef.current.close();
       };
     } catch {
-      // WS constructor error guard
+      setWsStatus('disconnected');
     }
   }, []);
 
@@ -896,6 +915,7 @@ export function App() {
           deviceName={deviceName}
           activeTab={activeTab}
           onTabChange={setActiveTab}
+          wsStatus={wsStatus}
         />
 
         {activeTab === 'transfer' ? (
