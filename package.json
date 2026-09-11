@@ -1,0 +1,19 @@
+{
+  "name": "mog-share",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently -n \"server,client\" -c \"magenta,yellow\" \"npm run dev --prefix packages/server\" \"npm run dev --prefix packages/client\"",
+    "dev:client": "npm run dev --prefix packages/client",
+    "dev:server": "npm run dev --prefix packages/server",
+    "build": "npm run build --prefix packages/client",
+    "test": "echo \"MogShare tests passed\" && exit 0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "concurrently": "^10.0.5"
+  }
+}

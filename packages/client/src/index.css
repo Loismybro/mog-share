@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+:root {
+  --neo-bg: #fffdf8;
+  --neo-black: #000000;
+  --neo-pink: #ff90e8;
+  --neo-yellow: #ffc900;
+  --neo-mint: #23a094;
+  --neo-mint-bright: #00f59b;
+  --neo-blue: #90b8f8;
+  --neo-coral: #ff6b6b;
+  --neo-purple: #d3b5ff;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--neo-bg);
+  color: var(--neo-black);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-x: hidden;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Retro Grid Background */
+.retro-grid-bg {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+}
+
+/* Neo-Brutalist Containers (Gumroad / Colourmaxxing) */
+.neo-box {
+  background-color: #ffffff;
+  border: 3px solid #000000;
+  box-shadow: 5px 5px 0px #000000;
+  border-radius: 18px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.neo-box-interactive:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0px #000000;
+}
+
+.neo-box-interactive:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px #000000;
+}
+
+/* Chunky Tactile Buttons */
+.neo-btn {
+  border: 3px solid #000000;
+  font-weight: 700;
+  box-shadow: 4px 4px 0px #000000;
+  transition: all 0.12s ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 14px;
+}
+
+.neo-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 6px 6px 0px #000000;
+}
+
+.neo-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px #000000;
+}
+
+.neo-btn-pink {
+  background-color: #ff90e8;
+  color: #000000;
+}
+.neo-btn-pink:hover {
+  background-color: #ff75e3;
+}
+
+.neo-btn-yellow {
+  background-color: #ffc900;
+  color: #000000;
+}
+.neo-btn-yellow:hover {
+  background-color: #ffb800;
+}
+
+.neo-btn-mint {
+  background-color: #00f59b;
+  color: #000000;
+}
+.neo-btn-mint:hover {
+  background-color: #00e08d;
+}
+
+.neo-btn-blue {
+  background-color: #90b8f8;
+  color: #000000;
+}
+.neo-btn-blue:hover {
+  background-color: #79a8f7;
+}
+
+.neo-btn-black {
+  background-color: #000000;
+  color: #ffffff;
+}
+.neo-btn-black:hover {
+  background-color: #1a1a1a;
+}
+
+/* Neo-Brutalist Sticker Badges */
+.neo-badge {
+  border: 2px solid #000000;
+  font-family: ui-monospace, monospace;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 8px;
+  box-shadow: 2px 2px 0px #000000;
+  letter-spacing: 0.05em;
+}
+
+/* Marquee Ribbon */
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+.marquee-track {
+  display: flex;
+  width: 200%;
+  animation: marquee 25s linear infinite;
+}
+
+.marquee-track:hover {
+  animation-play-state: paused;
+}
+
+/* Striped Progress Bar for Transfer Dock */
+@keyframes stripes {
+  0% { background-position: 0 0; }
+  100% { background-position: 40px 0; }
+}
+
+.striped-progress {
+  background-image: linear-gradient(
+    45deg,
+    rgba(0, 0, 0, 0.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(0, 0, 0, 0.15) 50%,
+    rgba(0, 0, 0, 0.15) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 40px 40px;
+  animation: stripes 1.2s linear infinite;
+}
+
+/* Radar Rotating Beam */
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.animate-sweep {
+  animation: radar-sweep 6s linear infinite;
+}
