@@ -46,7 +46,9 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
 
   useEffect(() => {
     if (roomCode) {
-      const shareUrl = `${window.location.origin}/#room=${roomCode}`;
+      const origin = window.location.origin;
+      const pathname = window.location.pathname.replace(/\/+$/, '');
+      const shareUrl = `${origin}${pathname}/#room=${roomCode}`;
       QRCode.toDataURL(shareUrl, {
         width: 260,
         margin: 1.5,
@@ -63,7 +65,9 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
   const handleCopy = () => {
     if (!roomCode) return;
     sound.playPop();
-    const shareUrl = `${window.location.origin}/#room=${roomCode}`;
+    const origin = window.location.origin;
+    const pathname = window.location.pathname.replace(/\/+$/, '');
+    const shareUrl = `${origin}${pathname}/#room=${roomCode}`;
     navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -80,16 +84,18 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
     if (cleanDigits.length > 3) {
       setJoinCodeInput(`${cleanDigits.slice(0, 3)}-${cleanDigits.slice(3, 6)}`);
     } else {
-      setJoinCodeInput(digitsOnly.slice(0, 7));
+      setJoinCodeInput(digitsOnly.slice(0, 8));
     }
   };
 
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = joinCodeInput.trim();
-    if (!trimmed) return;
+    const raw = joinCodeInput.trim();
+    if (!raw) return;
+    const cleanDigits = raw.replace(/[^\w]/g, '').toUpperCase();
+    const formatted = cleanDigits.length === 6 ? `${cleanDigits.slice(0, 3)}-${cleanDigits.slice(3, 6)}` : raw.toUpperCase();
     sound.playPop();
-    onJoinRoom(trimmed);
+    onJoinRoom(formatted);
   };
 
   const getPlatformIcon = (platform: Platform) => {
@@ -279,7 +285,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                 placeholder="Enter 6-digit code (e.g. 748-291)"
                 value={joinCodeInput}
                 onChange={handleInputChange}
-                maxLength={7}
+                maxLength={10}
                 className="flex-1 px-4 py-3 rounded-xl border-3 border-[#2a324b] bg-[#0e111a] text-white text-sm font-mono font-bold tracking-wider placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:border-[#FFC900] shadow-[3px_3px_0px_#000]"
               />
               <button

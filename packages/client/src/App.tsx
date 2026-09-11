@@ -32,17 +32,14 @@ function detectDefaultDevice(): { name: string; platform: Platform } {
 }
 
 function getPersistentDeviceId(): string {
-  // Use sessionStorage so multiple tabs in the same browser have unique device IDs for instant multi-tab testing
-  let id = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mog_device_id') : null;
-  if (!id) {
-    id = 'mog_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
-    try {
-      sessionStorage.setItem('mog_device_id', id);
-    } catch {
-      // Storage fallback
+  // Use window.name for robust per-tab isolation (never duplicated when opening new tabs)
+  if (typeof window !== 'undefined') {
+    if (!window.name || !window.name.startsWith('mog_tab_')) {
+      window.name = 'mog_tab_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
     }
+    return window.name;
   }
-  return id;
+  return 'mog_' + Math.random().toString(36).substring(2, 9);
 }
 
 export function App() {
@@ -70,15 +67,13 @@ export function App() {
   });
   const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Initialize room & mode from URL hash or sessionStorage
+  // Initialize room & mode from URL hash ONLY (prevent stuck zombie rooms)
   const getInitialRoomAndMode = () => {
     const hash = typeof window !== 'undefined' ? window.location.hash : '';
     const hashRoom = hash.startsWith('#room=') ? hash.replace('#room=', '').trim() : null;
-    const sessionRoom = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mog_room_code') : null;
-    const code = hashRoom || sessionRoom || null;
     return {
-      code,
-      mode: (code ? 'online' : 'local') as ShareMode,
+      code: hashRoom || null,
+      mode: (hashRoom ? 'online' : 'local') as ShareMode,
     };
   };
 
@@ -216,6 +211,17 @@ export function App() {
             case 'error': {
               console.warn('[MOG-SHARE Server Error]:', msg.payload?.message);
               setRoomError(msg.payload?.message || 'Room error occurred');
+              setRoomCode(null);
+              roomCodeRef.current = null;
+              setOnlineRoomPeers([]);
+              setSelectedDeviceId(null);
+              pendingRoomJoinRef.current = null;
+              if (typeof window !== 'undefined' && window.location.hash.startsWith('#room=')) {
+                window.location.hash = '';
+                try {
+                  history.replaceState(null, '', window.location.pathname);
+                } catch {}
+              }
               break;
             }
 
@@ -245,8 +251,10 @@ export function App() {
             case 'room-created': {
               const code = msg.payload.roomCode;
               setRoomCode(code);
+              roomCodeRef.current = code;
               setRoomError(null);
-              sessionStorage.setItem('mog_room_code', code);
+              setOnlineRoomPeers([]);
+              setSelectedDeviceId(null);
               window.location.hash = `#room=${code}`;
               pendingRoomJoinRef.current = null;
               sound.playPop();
@@ -256,8 +264,8 @@ export function App() {
             case 'room-joined': {
               const code = msg.payload.roomCode;
               setRoomCode(code);
+              roomCodeRef.current = code;
               setRoomError(null);
-              sessionStorage.setItem('mog_room_code', code);
               window.location.hash = `#room=${code}`;
               pendingRoomJoinRef.current = null;
               sound.playPop();
@@ -552,10 +560,7 @@ export function App() {
     if (!cleanCode) return;
 
     pendingRoomJoinRef.current = cleanCode;
-    sessionStorage.setItem('mog_room_code', cleanCode);
-    window.location.hash = `#room=${cleanCode}`;
-    setRoomCode(cleanCode);
-
+    // Don't set roomCode optimistically — wait for server 'room-joined' confirmation
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
@@ -573,11 +578,17 @@ export function App() {
       wsRef.current.send(JSON.stringify({ type: 'leave-room' }));
     }
     setRoomCode(null);
+    roomCodeRef.current = null;
     setOnlineRoomPeers([]);
+    setSelectedDeviceId(null);
     setRoomError(null);
     pendingRoomJoinRef.current = null;
-    sessionStorage.removeItem('mog_room_code');
-    window.location.hash = '';
+    if (typeof window !== 'undefined') {
+      window.location.hash = '';
+      try {
+        history.replaceState(null, '', window.location.pathname);
+      } catch {}
+    }
   };
 
   const handleBroadcastClipboard = (content: string) => {

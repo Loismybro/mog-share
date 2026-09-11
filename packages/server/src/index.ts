@@ -53,12 +53,11 @@ setInterval(() => {
 
 export function normalizeRoomCode(raw: string): string {
   if (!raw) return '';
-  const cleaned = raw.trim().replace(/\s+/g, '').toUpperCase();
-  // If user enters 6 digits like 123456 -> format as 123-456
-  if (/^\d{6}$/.test(cleaned)) {
-    return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  const digitsOnly = raw.replace(/[^\w]/g, '').toUpperCase();
+  if (digitsOnly.length === 6) {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}`;
   }
-  return cleaned;
+  return raw.trim().toUpperCase();
 }
 
 function generateMogCode(): string {
@@ -178,6 +177,27 @@ wss.on('connection', (ws: WebSocket, req) => {
           const session = deviceId ? deviceSessions.get(deviceId) : null;
           if (!session) return;
 
+          // Clean up prior room membership if device was in an old room
+          if (session.info.roomCode) {
+            const oldRoom = rooms.get(session.info.roomCode);
+            if (oldRoom) {
+              oldRoom.peerIds.delete(session.info.id);
+              if (oldRoom.peerIds.size === 0) {
+                rooms.delete(session.info.roomCode);
+              } else {
+                for (const pid of oldRoom.peerIds) {
+                  const peerSess = deviceSessions.get(pid);
+                  if (peerSess?.ws && peerSess.ws.readyState === WebSocket.OPEN) {
+                    peerSess.ws.send(JSON.stringify({
+                      type: 'peer-left-room',
+                      payload: { peerId: session.info.id }
+                    }));
+                  }
+                }
+              }
+            }
+          }
+
           let code = generateMogCode();
           while (rooms.has(code)) {
             code = generateMogCode();
@@ -214,6 +234,27 @@ wss.on('connection', (ws: WebSocket, req) => {
               payload: { message: `Room "${targetCode}" not found or expired.` }
             }));
             return;
+          }
+
+          // If session was in a different room, leave that room first
+          if (session.info.roomCode && session.info.roomCode !== targetCode) {
+            const oldRoom = rooms.get(session.info.roomCode);
+            if (oldRoom) {
+              oldRoom.peerIds.delete(session.info.id);
+              if (oldRoom.peerIds.size === 0) {
+                rooms.delete(session.info.roomCode);
+              } else {
+                for (const pid of oldRoom.peerIds) {
+                  const peerSess = deviceSessions.get(pid);
+                  if (peerSess?.ws && peerSess.ws.readyState === WebSocket.OPEN) {
+                    peerSess.ws.send(JSON.stringify({
+                      type: 'peer-left-room',
+                      payload: { peerId: session.info.id }
+                    }));
+                  }
+                }
+              }
+            }
           }
 
           room.peerIds.add(session.info.id);
