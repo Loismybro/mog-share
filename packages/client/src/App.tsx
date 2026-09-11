@@ -149,7 +149,12 @@ export function App() {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const params = new URLSearchParams(window.location.search);
+    const customWs = params.get('ws') || 
+                     localStorage.getItem('mog_custom_ws_url') || 
+                     (import.meta.env.VITE_WS_URL as string | undefined);
+
+    const wsUrl = customWs ? customWs : `${protocol}//${window.location.host}/ws`;
 
     try {
       const ws = new WebSocket(wsUrl);

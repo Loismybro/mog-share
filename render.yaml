@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: mog-share-server
+    env: node
+    plan: free
+    buildCommand: npm install && npm install --prefix packages/server && npm install --prefix packages/client && npm run build --prefix packages/client
+    startCommand: npm start --prefix packages/server
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production

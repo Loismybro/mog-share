@@ -7,6 +7,7 @@
     "dev:client": "npm run dev --prefix packages/client",
     "dev:server": "npm run dev --prefix packages/server",
     "build": "npm run build --prefix packages/client",
+    "start": "npm start --prefix packages/server",
     "test": "echo \"MogShare tests passed\" && exit 0"
   },
   "keywords": [],

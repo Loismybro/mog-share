@@ -34,6 +34,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleAutoAccept,
 }) => {
   const [nameInput, setNameInput] = useState(deviceName);
+  const [serverInput, setServerInput] = useState(() => localStorage.getItem('mog_custom_ws_url') || '');
 
   if (!isOpen) return null;
 
@@ -41,6 +42,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     sound.playPop();
     if (nameInput.trim()) {
       onSaveDeviceName(nameInput.trim());
+    }
+    const currentCustom = localStorage.getItem('mog_custom_ws_url') || '';
+    if (serverInput.trim() !== currentCustom) {
+      if (serverInput.trim()) {
+        localStorage.setItem('mog_custom_ws_url', serverInput.trim());
+      } else {
+        localStorage.removeItem('mog_custom_ws_url');
+      }
+      window.location.reload();
+      return;
     }
     onClose();
   };
@@ -149,6 +160,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
               </button>
             </div>
+          </div>
+
+          {/* Custom Signaling Relay (Optional) */}
+          <div>
+            <label className="text-xs font-bold text-slate-400 block mb-1 uppercase font-mono">
+              Signaling Relay Server (Optional)
+            </label>
+            <input
+              type="text"
+              value={serverInput}
+              onChange={(e) => setServerInput(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl border-3 border-[#2a324b] bg-[#0e111a] text-white text-xs font-mono shadow-[2px_2px_0px_#000] focus:outline-none focus:border-[#FFC900]"
+              placeholder="e.g. wss://relay.your-domain.com/ws"
+            />
+            <span className="text-[10px] text-slate-500 block mt-1 font-mono">
+              Leave blank to use default host. Useful when hosting client on GitHub Pages.
+            </span>
           </div>
 
           {/* Privacy Footnote */}
