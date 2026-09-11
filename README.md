@@ -14,7 +14,7 @@
    ╚═╝     ╚═╝ ╚═════╝  ╚═════╝         ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
 ```
 
-[![License: MIT](https://img.shields.io/badge/LICENSE-MIT-131722?style=for-the-badge&logoColor=white&labelColor=000)](LICENSE)
+[![License: Protected](https://img.shields.io/badge/LICENSE-COMMERCIAL%20PROTECTED-FF90E8?style=for-the-badge&logoColor=000&labelColor=000)](LICENSE)
 [![Protocol: P2P + LAN](https://img.shields.io/badge/LAN%20SPEED-120%20MB%2FS-FFC900?style=for-the-badge&logoColor=000&labelColor=000)]()
 [![Cloud Storage: 0%](https://img.shields.io/badge/CLOUD%20STORAGE-0%25%20(100%25%20P2P)-00F59B?style=for-the-badge&logoColor=000&labelColor=000)]()
 [![Zero App Install](https://img.shields.io/badge/INSTALLATION-0%20APPS%20NEEDED-60A5FA?style=for-the-badge&logoColor=000&labelColor=000)]()
@@ -206,7 +206,7 @@ Contributions are what make the open-source community so awesome. Any contributi
 
 ## 📄 License
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under the **MOG-SHARE Source-Available & Commercial Protection License v1.0**. Free for personal evaluation and self-hosting. Commercial exploitation, SaaS hosting, and unauthorized app store distribution are strictly prohibited. See `LICENSE` for details.
 
 <div align="center">
 
