@@ -2,7 +2,7 @@
 
 # ⚡ MOG-SHARE
 
-### **The Open-Source AirDrop Killer. Built for Chads.**
+### **The Open-Source Universal File Transfer Mogger. Built for Chads.**
 *Share gigabytes between iPhone, Android, Mac, Windows, and Linux in seconds. No cloud. No accounts. No paywalls. No walled gardens.*
 
 ```
@@ -17,12 +17,12 @@
 [![License: MIT](https://img.shields.io/badge/LICENSE-MIT-131722?style=for-the-badge&logoColor=white&labelColor=000)](LICENSE)
 [![Protocol: P2P + LAN](https://img.shields.io/badge/LAN%20SPEED-120%20MB%2FS-FFC900?style=for-the-badge&logoColor=000&labelColor=000)]()
 [![Cloud Storage: 0%](https://img.shields.io/badge/CLOUD%20STORAGE-0%25%20(100%25%20P2P)-00F59B?style=for-the-badge&logoColor=000&labelColor=000)]()
-[![E2EE: Direct Streams](https://img.shields.io/badge/PRIVACY-ZERO%20LOGS-60A5FA?style=for-the-badge&logoColor=000&labelColor=000)]()
-[![Aesthetic: Neo-Brutalist](https://img.shields.io/badge/AESTHETIC-GUMROAD%20COLOURMAXXED-FF90E8?style=for-the-badge&logoColor=000&labelColor=000)]()
+[![Zero App Install](https://img.shields.io/badge/INSTALLATION-0%20APPS%20NEEDED-60A5FA?style=for-the-badge&logoColor=000&labelColor=000)]()
+[![Privacy: Zero Logs](https://img.shields.io/badge/PRIVACY-ZERO%20TELEMETRY-FF4444?style=for-the-badge&logoColor=000&labelColor=000)]()
 
 <br/>
 
-[**Live Demo**](https://github.com/Loismybro/mog-share) • [**Why It Mogs**](#-why-mog-share) • [**Quickstart (30s)**](#-quickstart-run-in-30-seconds) • [**How It Works**](#-how-it-actually-works) • [**Mogging Matrix**](#-the-mogging-matrix) • [**Roadmap**](#-roadmap)
+[**Live Demo**](https://github.com/Loismybro/mog-share) • [**Why It Mogs**](#-why-mog-share) • [**The Mogging Matrix**](#-the-mogging-matrix) • [**Quickstart (30s)**](#-quickstart-run-in-30-seconds) • [**How It Actually Works**](#-how-it-actually-works) • [**Roadmap**](#-roadmap)
 
 </div>
 
@@ -55,18 +55,18 @@
 
 ## 💥 Why MOG-SHARE?
 
-Every file transfer tool today has a catch:
+Every legacy file transfer tool today has a catch:
 
-- **Apple AirDrop** is trapped in Tim Cook's $1,200 walled garden. Try sending a 4K video from your iPhone to a Windows PC or Linux desktop. Good luck.
-- **Quick Share / Nearby Share** locks out Apple and Linux users.
-- **LocalSend** is cool, but **fails the second you leave your living room Wi-Fi** and forces everyone to install an app before you can send a single byte.
-- **WeTransfer & Google Drive** upload your private vacation photos to corporate cloud servers, cap your file sizes, and make you wait 10 minutes for links to expire.
+- **That Fruit-Co "Air" Drop Tool 🍏** *(You know the Cupertino one)*: Trapped inside a $1,200 walled garden. Try sending a 50GB ProRes video or photo batch straight from your phone to a Windows workstation or Linux box over local Wi-Fi without iCloud, iTunes, or cable headaches. Pure pain.
+- **The Green-Robot / Mountain-View "Quick" & "Nearby" Share 🤖**: Completely ghosts anyone using Apple or Linux hardware. Locked deep into proprietary vendor silos.
+- **That LAN-Only "Local-Sending" Tool 📱**: Works alright on your living room couch, but **completely dies the split second you step off your home Wi-Fi**. Worse: it forces every friend in the room to download and install a full application before you can send them a single byte.
+- **The "We"-Transfers & Corporate Cloud "Drives" ☁️**: Upload your private files to corporate cloud data centers, bottleneck you with 2 GB free limits, throttle download speeds, double-hop your bandwidth (upload to cloud, then download from cloud), and force you to wait for expiration countdowns.
 
 ### Enter MOG-SHARE.
 One click. Any OS. Zero installs for friends.
 
 ```
-       YOU (MacBook / PC)                     FRIEND (iPhone / Android)
+       YOU (Laptop / PC / Phone)              FRIEND (Any Device)
     ┌────────────────────────┐              ┌────────────────────────┐
     │   Select 4K Video      │   6-digit    │  Point Phone Camera    │
     │   (Drop on Radar)      │ ───────────> │  Tap Pop-up Link       │
@@ -79,7 +79,7 @@ One click. Any OS. Zero installs for friends.
 
 1. **⚡ Local Share (LAN Radar)**: Automatic zero-config discovery over your local Wi-Fi or hotspot. Streams at full router line-rate (**up to 120 MB/s**). Completely works with your internet router unplugged from the wall.
 2. **🌐 Online Share (Cross-Network Rooms)**: Friend is on mobile 5G or in another country? Give them a **6-digit room code** (e.g. `748-291`) or send a magic link. Direct end-to-end chunk streaming without size limits.
-3. **📱 Zero-Install Guest Mode (Camera QR Scan)**: Need to give files to someone who doesn't have MOG-SHARE? Show them the on-screen QR code. They point their native iOS Camera or Android Google Lens—Safari/Chrome immediately opens and starts downloading. No App Store, no signup, no friction.
+3. **📱 Zero-Install Guest Mode (Camera QR Scan)**: Need to give files to someone who doesn't have MOG-SHARE? Show them the on-screen QR code. They point their native camera—their browser immediately opens and starts downloading. No App Store, no signup, no friction.
 4. **📋 Universal Real-Time Clipboard**: Copy a link or password on your desktop, hit broadcast, and it pops right up as a toast on your phone.
 5. **🛡️ Rock-Solid Mobile Engine**: Engineered with a **60-second mobile disconnect grace period** and **backpressure streaming**. Switch to your photo gallery, pick 20 high-res camera photos, and your session never drops or restarts.
 
@@ -87,16 +87,17 @@ One click. Any OS. Zero installs for friends.
 
 ## 🥊 The Mogging Matrix
 
-| Feature | Apple AirDrop | LocalSend | Quick Share | WeTransfer | **MOG-SHARE** |
+| Feature | That Fruit "Air" Drop 🍏 | That "Local" + "Send" Tool 📱 | The Green-Robot "Quick" Share 🤖 | The "We"-Transfers & Cloud "Boxes" ☁️ | **MOG-SHARE** ⚡ |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **All OSes (iOS, Android, Mac, Win, Linux)** | ❌ Apple only | ✅ | ❌ No iOS/Mac | ⚠️ Web only | **👑 MOGS ALL** |
-| **Zero App Install (Guest Camera Scan)** | ❌ | ❌ (Must install) | ❌ | ⚠️ Cloud only | **✅ Native Web API** |
-| **Offline LAN Speed (No Internet Needed)** | ✅ | ✅ | ✅ | ❌ Needs Wi-Fi | **✅ Up to 120 MB/s** |
-| **Cross-Network / Cell Data P2P** | ❌ | ❌ (Same LAN only)| ❌ | ⚠️ Capped & Slow | **✅ 6-Digit Rooms** |
-| **File Size Limit** | Uncapped | Uncapped | Uncapped | 2 GB free cap | **♾️ Unlimited** |
-| **Cloud Surveillance / Storage** | 0% | 0% | Logs metadata | 100% on cloud | **🔒 0% (Pure P2P)** |
-| **Universal Clipboard Sync** | Apple only | ❌ | ❌ | ❌ | **✅ Built-in Toast** |
-| **Design Language** | Plain gray | Flutter generic | Material UI | Ad-bloated web | **🔥 Neo-Brutalist** |
+| **All Platforms (iOS, Android, Mac, Win, Linux)** | ❌ Fruit OS only | ✅ | ❌ No Fruit/Linux | ⚠️ Browser-only cloud hop | **👑 MOGS ALL (Native Web)** |
+| **Zero App Install (Camera QR Direct Scan)** | ❌ (Must have Fruit OS) | ❌ (Must install on every device) | ❌ (Must have Android) | ⚠️ Cloud download link | **✅ 100% Zero-Install (Native Web API)** |
+| **Offline LAN Speed (Zero Internet Needed)** | ✅ (Fruit devices only) | ✅ | ✅ | ❌ Uploads to internet servers | **✅ Up to 120 MB/s (Full Line Rate)** |
+| **Remote Cross-Network / 5G Cellular P2P** | ❌ (Local proximity only) | ❌ (Same LAN router only) | ❌ (Local proximity only) | ⚠️ Capped, slow & double-hops | **✅ 6-Digit Direct Rooms** |
+| **File Size Restrictions** | Uncapped | Uncapped | Uncapped | ❌ 2 GB free cap + paywall | **♾️ Unlimited (Streamed Chunks)** |
+| **Data Harvesting & Cloud Retention** | 0% | 0% | Logs telemetry & metadata | ❌ 100% on third-party cloud | **🔒 0% (Direct Memory-to-Memory)** |
+| **Universal Real-Time Clipboard Sync** | Fruit ecosystem only | ❌ | ❌ | ❌ | **✅ Built-in Instant Toast** |
+| **Background Tab / File Picker Resilience** | ❌ Drops connection | ❌ Must stay inside app | ❌ Interrupted easily | ❌ Browser tab reloads | **🛡️ 60s Mobile Grace + Backpressure** |
+| **Recipient Experience** | Must be in contacts & same OS | Must download & configure app | Must toggle Bluetooth & share settings | Must wait 10m to download from cloud | **⚡ Point Camera or Click Link & Done** |
 
 ---
 
@@ -141,7 +142,7 @@ Copy the generated `https://xxxx.trycloudflare.com` URL, send it to your friend 
 
 ## 🧠 How It Actually Works
 
-MOG-SHARE does not upload your files to AWS S3, Google Cloud, or any central database. Ever.
+MOG-SHARE does not upload your files to third-party cloud storage, remote corporate servers, or any central database. Ever.
 
 ```
                     ┌────────────────────────────────────┐
@@ -166,21 +167,20 @@ Mobile web browsers are notorious for killing background tabs the second you ope
 
 ---
 
-## 🎨 Design Philosophy: Neo-Brutalist & Tactile
+## ⚙️ Pure Functionality: Zero Bloat, Instant Performance
 
-We are sick and tired of sterile corporate dashboards with identical purple-to-blue AI gradients.
+No corporate bloat, no subscription upsells, no forced logins. MOG-SHARE is engineered for raw speed and friction-free usability:
 
-MOG-SHARE is styled with:
-- **Bold 3px black borders & hard isometric drop shadows** (`#000`)
-- **Vibrant high-contrast palette**: Cyberpunk Yellow (`#FFC900`), Mint Green (`#00F59B`), Electric Pink (`#FF90E8`), Soft Cobalt (`#60A5FA`)
-- **Synthesizer Haptic Audio**: Crisp retro arcade dings and pops synthesized in pure Web Audio API without heavy `.mp3` assets.
-- **Tactical HUD Radar**: Real-time rotating sonar beam that visually plots nearby devices based on platform.
+- **Direct In-Memory Binary Pipeline**: Pure `ArrayBuffer` and `Uint8Array` slicing directly into browser memory — zero middleman storage overhead or temporary file caching on third-party servers.
+- **Synthesized Web Audio Engine**: Zero MP3 asset bloat. Pure Web Audio API oscillators synthesize real-time frequency-modulated acoustic feedback for connections, chunk transfer ticks, and completion chimes with zero network requests.
+- **Active Sonar LAN Beacon**: Continuous zero-config device discovery scanning peer IP, platform runtime, and local subnet latency without requiring SSDP or mDNS daemon installations.
+- **Zero-Install Web Engine**: Runs natively in any modern browser using typed `Uint8Array` memory buffers and standard Web Streams.
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] **Universal Web Client**: Works in Safari, Chrome, Firefox, Brave, Edge, Samsung Internet.
+- [x] **Universal Web Engine**: Cross-compatible with all modern mobile and desktop web browsers.
 - [x] **Local LAN Discovery**: Line-rate offline Wi-Fi transfers (120 MB/s).
 - [x] **Online P2P Rooms**: 6-digit codes (`XXX-XXX`) with QR camera scan.
 - [x] **Universal Clipboard Sync**: Instant encrypted clipboard broadcast across devices.
@@ -211,6 +211,6 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 <div align="center">
 
 **MOG-SHARE** — Built by hackers, for hackers.  
-*Star ⭐ the repo if this saved you from Apple's ecosystem trap!*
+*Star ⭐ the repo if this saved you from proprietary ecosystem traps!*
 
 </div>
