@@ -51,12 +51,11 @@ export const Header: React.FC<HeaderProps> = ({
           <MogLogo size={46} animated={true} />
 
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xl sm:text-2xl font-black tracking-tight uppercase text-white font-mono">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl sm:text-2xl font-black tracking-tight uppercase text-white font-mono leading-none">
                 MOG-SHARE
               </span>
-              {/* Shifted P2P Badge */}
-              <span className="neo-badge bg-[#FFC900] text-black text-[10px] font-mono font-black tracking-wider uppercase px-1.5 py-0.5 rounded-md relative -top-2.5 -rotate-3 shadow-[2px_2px_0px_#000]">
+              <span className="neo-badge bg-[#FFC900] text-black text-[10px] font-mono font-black tracking-wider uppercase px-2 py-0.5 rounded-md shadow-[2px_2px_0px_#000]">
                 P2P
               </span>
             </div>

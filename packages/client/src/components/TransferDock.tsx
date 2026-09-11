@@ -5,7 +5,7 @@ import {
   CheckCircle2, 
   XCircle, 
   Download, 
-  Zap, 
+  Activity, 
   ChevronUp, 
   ChevronDown 
 } from 'lucide-react';
@@ -74,7 +74,7 @@ export const TransferDock: React.FC<TransferDockProps> = ({
               {activeTransfer && (
                 <div className="text-[11px] font-mono font-bold text-slate-400 flex items-center gap-2 mt-0.5">
                   <span className="flex items-center gap-1 text-[#00F59B]">
-                    <Zap className="w-3.5 h-3.5 fill-[#00F59B]" />
+                    <Activity className="w-3.5 h-3.5 stroke-[2.5]" />
                     {formatSpeed(activeTransfer.speedBytesPerSec)}
                   </span>
                   <span>•</span>
@@ -141,7 +141,7 @@ export const TransferDock: React.FC<TransferDockProps> = ({
                 <div className="flex items-center gap-2 min-w-0 pr-2">
                   {item.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-[#00F59B] stroke-[2.5]" />}
                   {item.status === 'cancelled' && <XCircle className="w-4 h-4 text-slate-500 stroke-[2.5]" />}
-                  {item.status === 'transferring' && <Zap className="w-4 h-4 text-[#FFC900] fill-black animate-bounce" />}
+                  {item.status === 'transferring' && <Activity className="w-4 h-4 text-[#FFC900] stroke-[2.5] animate-pulse" />}
                   
                   <div className="min-w-0">
                     <p className="truncate font-bold text-white m-0">{item.name}</p>

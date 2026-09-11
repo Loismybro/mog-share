@@ -7,7 +7,6 @@ import {
   ArrowRight, 
   Laptop, 
   Smartphone, 
-  Zap, 
   Check, 
   Sparkles,
   Layers
@@ -59,8 +58,8 @@ export const InstructionsPage: React.FC<InstructionsPageProps> = ({ onBackToHub 
             }}
             className="neo-btn neo-btn-yellow mt-5 px-6 py-2.5 text-xs font-black uppercase text-black"
           >
-            <Zap className="w-4 h-4 fill-black" />
             <span>Launch Transfer Hub</span>
+            <ArrowRight className="w-4 h-4 stroke-[3]" />
           </button>
         </div>
       </div>
@@ -107,46 +106,48 @@ export const InstructionsPage: React.FC<InstructionsPageProps> = ({ onBackToHub 
         </div>
 
         {/* Animated Data Pipe Canvas */}
-        <div className="p-6 rounded-2xl bg-[#0b0d14] border-2 border-[#2a324b] relative overflow-hidden min-h-[200px] flex items-center justify-between px-6 sm:px-16">
+        <div className="p-6 rounded-2xl bg-[#0b0d14] border-2 border-[#2a324b] relative overflow-hidden min-h-[190px] flex items-center justify-between px-6 sm:px-14">
           
           {/* Sender Node: MacBook / Laptop */}
-          <div className="flex flex-col items-center relative z-10">
-            <div className="w-16 h-16 rounded-2xl bg-[#FFC900] border-3 border-black shadow-[4px_4px_0px_#000] flex items-center justify-center -rotate-2">
+          <div className="flex flex-col items-center relative z-10 shrink-0">
+            <div className="w-16 h-16 rounded-2xl bg-[#FFC900] border-3 border-black shadow-[4px_4px_0px_#000] flex items-center justify-center">
               <Laptop className="w-8 h-8 text-black stroke-[2.5]" />
             </div>
-            <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-200 text-[10px] mt-2">
+            <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-200 text-[10px] mt-2 shadow-[2px_2px_0px_#000]">
               Mac / PC
             </span>
           </div>
 
-          {/* Animated Connecting Data Bridge */}
-          <div className="flex-1 mx-4 sm:mx-8 relative flex items-center justify-center">
-            {/* Dashed Transmission Line */}
-            <div className="w-full h-1 bg-zinc-800 relative">
-              <div 
-                className={`h-full ${demoMode === 'local' ? 'bg-[#FFC900]' : 'bg-[#00F59B]'} striped-progress`} 
-              />
-            </div>
-
-            {/* Orbiting / Flying Data Packets */}
-            <div className="absolute flex items-center gap-1 -top-3 animate-bounce">
-              <span className={`neo-badge ${demoMode === 'local' ? 'bg-[#FFC900]' : 'bg-[#00F59B]'} text-black text-[9px] py-0.5 px-2`}>
-                {demoMode === 'local' ? '120.4 MB/s [LAN]' : '28.6 MB/s [E2EE P2P]'}
+          {/* Clean High-Speed Data Conduit (Zero Interruption) */}
+          <div className="flex-1 mx-6 sm:mx-10 flex flex-col items-center justify-center">
+            {/* Speed Badge Cleanly Positioned Above Line */}
+            <div className="mb-3">
+              <span className={`neo-badge ${demoMode === 'local' ? 'bg-[#FFC900]' : 'bg-[#00F59B]'} text-black text-[10px] font-mono font-black py-1 px-3 shadow-[2px_2px_0px_#000]`}>
+                {demoMode === 'local' ? '120.4 MB/s DIRECT LAN STREAM' : '28.6 MB/s ENCRYPTED P2P'}
               </span>
             </div>
 
-            {/* Glowing Center Packet Node */}
-            <div className="absolute w-8 h-8 rounded-full bg-[#131722] border-2 border-black flex items-center justify-center shadow-[0_0_15px_rgba(0,245,155,0.4)]">
-              <Zap className="w-4 h-4 text-[#00F59B] fill-[#00F59B] animate-pulse" />
+            {/* Uninterrupted Data Conduit Pipe */}
+            <div className="w-full h-3.5 bg-[#151926] border-2 border-black rounded-full overflow-hidden relative shadow-[2px_2px_0px_#000]">
+              <div 
+                className={`h-full w-full ${demoMode === 'local' ? 'bg-[#FFC900]' : 'bg-[#00F59B]'} striped-progress`} 
+              />
+            </div>
+
+            {/* Flow Indicators Cleanly Aligned Below */}
+            <div className="mt-2.5 flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-400">
+              <span className="uppercase tracking-wider">DIRECT STREAMING</span>
+              <ArrowRight className={`w-3.5 h-3.5 stroke-[3] ${demoMode === 'local' ? 'text-[#FFC900]' : 'text-[#00F59B]'}`} />
+              <span className="text-slate-500">NO INTERMEDIARY</span>
             </div>
           </div>
 
           {/* Receiver Node: Phone */}
-          <div className="flex flex-col items-center relative z-10">
-            <div className="w-16 h-16 rounded-2xl bg-[#00F59B] border-3 border-black shadow-[4px_4px_0px_#000] flex items-center justify-center rotate-2">
+          <div className="flex flex-col items-center relative z-10 shrink-0">
+            <div className="w-16 h-16 rounded-2xl bg-[#00F59B] border-3 border-black shadow-[4px_4px_0px_#000] flex items-center justify-center">
               <Smartphone className="w-8 h-8 text-black stroke-[2.5]" />
             </div>
-            <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-200 text-[10px] mt-2">
+            <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-200 text-[10px] mt-2 shadow-[2px_2px_0px_#000]">
               iPhone / Android
             </span>
           </div>

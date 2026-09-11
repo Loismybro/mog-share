@@ -22,7 +22,7 @@ export const MogLogo: React.FC<MogLogoProps> = ({
         viewBox="0 0 48 48"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className={`w-full h-full ${animated ? 'transition-transform duration-200 hover:rotate-3' : ''}`}
+        className={`w-full h-full ${animated ? 'transition-transform duration-200 hover:scale-105' : ''}`}
       >
         {/* Hard Offset Drop Shadow */}
         <path
@@ -49,18 +49,6 @@ export const MogLogo: React.FC<MogLogoProps> = ({
           stroke="#000000"
           strokeWidth="2.5"
         />
-
-        {/* Center Transmission Spark */}
-        {animated && (
-          <circle
-            cx="24"
-            cy="24"
-            r="7"
-            stroke="#00F59B"
-            strokeWidth="1.5"
-            className="animate-ping opacity-75"
-          />
-        )}
       </svg>
     </div>
   );

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Wifi, Globe, ShieldCheck, Zap } from 'lucide-react';
+import { Wifi, Globe, ShieldCheck } from 'lucide-react';
 import { ShareMode } from '../types';
 import { sound } from '../utils/audio';
 
@@ -63,7 +63,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       <div className="mt-3 flex items-center justify-center gap-3 text-xs font-bold">
         {currentMode === 'local' ? (
           <div className="neo-badge bg-[#161a28] border-[#2a324b] text-[#00F59B] flex items-center gap-1.5 shadow-[3px_3px_0px_#000] py-1 px-3">
-            <Zap className="w-3.5 h-3.5 fill-[#00F59B]" />
+            <Wifi className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>Direct Line-rate Wi-Fi (Up to 120 MB/s) • 100% Offline</span>
           </div>
         ) : (

@@ -218,7 +218,7 @@ export const DeviceRadar: React.FC<DeviceRadarProps> = ({
       {/* Target Selected Notification */}
       {selectedDeviceId && (
         <div className="mt-3 text-center">
-          <span className="neo-badge bg-[#00F59B] text-black inline-flex items-center gap-1.5 py-1 px-3 shadow-[3px_3px_0px_#000] animate-bounce">
+          <span className="neo-badge bg-[#00F59B] text-black inline-flex items-center gap-1.5 py-1 px-3 shadow-[3px_3px_0px_#000]">
             <Send className="w-3.5 h-3.5 stroke-[3]" />
             Target peer selected! Drop files below to send.
           </span>
