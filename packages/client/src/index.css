@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --neo-bg: #fffdf8;
+  --neo-bg: #f5f0e6;
   --neo-black: #000000;
   --neo-pink: #ff90e8;
   --neo-yellow: #ffc900;
@@ -23,26 +23,25 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Retro Grid Background */
-.retro-grid-bg {
-  background-size: 32px 32px;
-  background-image: 
-    linear-gradient(to right, rgba(0, 0, 0, 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+/* Warm Dot-Matrix Canvas (Authentic Gumroad Paper Texture) */
+.gumroad-canvas-bg {
+  background-color: #f5f0e6;
+  background-image: radial-gradient(rgba(0, 0, 0, 0.12) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
 }
 
 /* Neo-Brutalist Containers (Gumroad / Colourmaxxing) */
 .neo-box {
-  background-color: #ffffff;
-  border: 3px solid #000000;
-  box-shadow: 5px 5px 0px #000000;
-  border-radius: 18px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  background-color: #fffdf9;
+  border: 3.5px solid #000000;
+  box-shadow: 6px 6px 0px #000000;
+  border-radius: 20px;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .neo-box-interactive:hover {
   transform: translate(-2px, -2px);
-  box-shadow: 7px 7px 0px #000000;
+  box-shadow: 8px 8px 0px #000000;
 }
 
 .neo-box-interactive:active {
@@ -53,9 +52,9 @@ body {
 /* Chunky Tactile Buttons */
 .neo-btn {
   border: 3px solid #000000;
-  font-weight: 700;
+  font-weight: 800;
   box-shadow: 4px 4px 0px #000000;
-  transition: all 0.12s ease;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -87,7 +86,7 @@ body {
   color: #000000;
 }
 .neo-btn-yellow:hover {
-  background-color: #ffb800;
+  background-color: #ffbe00;
 }
 
 .neo-btn-mint {
@@ -116,15 +115,35 @@ body {
 
 /* Neo-Brutalist Sticker Badges */
 .neo-badge {
-  border: 2px solid #000000;
+  border: 2.5px solid #000000;
   font-family: ui-monospace, monospace;
-  font-weight: 800;
+  font-weight: 900;
   text-transform: uppercase;
   font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 8px;
-  box-shadow: 2px 2px 0px #000000;
+  padding: 0.25rem 0.65rem;
+  border-radius: 10px;
+  box-shadow: 3px 3px 0px #000000;
   letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+/* Subtle Floating Animations */
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+}
+
+.animate-float {
+  animation: float-slow 4s ease-in-out infinite;
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-pop {
+  animation: pop-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Marquee Ribbon */
@@ -136,7 +155,7 @@ body {
 .marquee-track {
   display: flex;
   width: 200%;
-  animation: marquee 25s linear infinite;
+  animation: marquee 24s linear infinite;
 }
 
 .marquee-track:hover {
@@ -152,11 +171,11 @@ body {
 .striped-progress {
   background-image: linear-gradient(
     45deg,
-    rgba(0, 0, 0, 0.15) 25%,
+    rgba(0, 0, 0, 0.18) 25%,
     transparent 25%,
     transparent 50%,
-    rgba(0, 0, 0, 0.15) 50%,
-    rgba(0, 0, 0, 0.15) 75%,
+    rgba(0, 0, 0, 0.18) 50%,
+    rgba(0, 0, 0, 0.18) 75%,
     transparent 75%,
     transparent
   );
@@ -171,5 +190,26 @@ body {
 }
 
 .animate-sweep {
-  animation: radar-sweep 6s linear infinite;
+  animation: radar-sweep 5s linear infinite;
+}
+
+/* Custom Neo-Brutalist Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f5f0e6;
+  border-left: 2px solid #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ffc900;
+  border: 2px solid #000;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ff90e8;
 }

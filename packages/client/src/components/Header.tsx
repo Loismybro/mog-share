@@ -48,28 +48,28 @@ export const Header: React.FC<HeaderProps> = ({
                 P2P
               </span>
             </div>
-            <p className="text-xs font-medium text-slate-700 m-0 flex items-center gap-2">
-              <span className="font-bold">{deviceName}</span>
-              <span>•</span>
+            <div className="text-xs font-medium text-slate-700 m-0 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="font-bold truncate max-w-[150px] sm:max-w-none">{deviceName}</span>
+              <span className="text-slate-400">•</span>
               <span className="flex items-center gap-1 font-mono">
                 {mode === 'local' ? (
                   <>
                     <Wifi className="w-3.5 h-3.5 text-[#23A094] inline stroke-[2.5]" />
-                    <span className="text-[#23A094] font-bold uppercase">LAN Mesh (120 MB/s)</span>
+                    <span className="text-[#23A094] font-bold uppercase">LAN (120 MB/s)</span>
                   </>
                 ) : (
                   <>
                     <Globe className="w-3.5 h-3.5 text-[#3b82f6] inline stroke-[2.5]" />
-                    <span className="text-[#3b82f6] font-bold uppercase">P2P WAN Online</span>
+                    <span className="text-[#3b82f6] font-bold uppercase">P2P Online</span>
                   </>
                 )}
               </span>
-            </p>
+            </div>
           </div>
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap justify-center sm:justify-end">
           {/* Active Nodes Sticker */}
           <div className="neo-badge bg-[#00F59B] text-black flex items-center gap-1.5 py-1 px-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-black animate-ping inline-block" />

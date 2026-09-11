@@ -16,7 +16,7 @@ import { formatBytes } from './utils/formatters';
 
 export function App() {
   const [deviceName, setDeviceName] = useState(() => {
-    return localStorage.getItem('mog_device_name') || 'Chad MacBook M3';
+    return localStorage.getItem('mog_device_name') || "Alex's MacBook Pro";
   });
   const [platform, setPlatform] = useState<Platform>(() => {
     return (localStorage.getItem('mog_platform') as Platform) || 'macos';
@@ -51,21 +51,21 @@ export function App() {
   const [localDevices, setLocalDevices] = useState<Device[]>([
     {
       id: 'demo-iphone',
-      name: "Mogger's iPhone 16 Pro",
+      name: "Sarah's iPhone 16 Pro",
       platform: 'ios',
       isLocal: true,
       status: 'online',
     },
     {
       id: 'demo-pixel',
-      name: 'Pixel 9 Pro Fold',
+      name: "Sam's Pixel 9 Pro",
       platform: 'android',
       isLocal: true,
       status: 'online',
     },
     {
       id: 'demo-linux',
-      name: 'Homelab Arch Linux',
+      name: 'Studio Linux Box',
       platform: 'linux',
       isLocal: true,
       status: 'online',
@@ -77,9 +77,9 @@ export function App() {
   useEffect(() => {
     sound.enabled = soundEnabled;
   }, [soundEnabled]);
-
   useEffect(() => {
-    const wsUrl = `ws://${window.location.hostname}:4000/ws`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
     let ws: WebSocket;
 
     try {
@@ -419,7 +419,7 @@ export function App() {
   const isTransferring = transfers.some((t) => t.status === 'transferring');
 
   return (
-    <div className="min-h-screen pb-28 flex flex-col justify-between selection:bg-[#FFC900] selection:text-black">
+    <div className="min-h-screen pb-28 flex flex-col justify-between gumroad-canvas-bg selection:bg-[#FFC900] selection:text-black">
       {/* Top Warning Ribbon Marquee */}
       <MarqueeTicker />
 

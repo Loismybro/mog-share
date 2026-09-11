@@ -89,7 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl border-3 border-black text-sm font-bold shadow-[2px_2px_0px_#000] focus:outline-none focus:ring-2 focus:ring-[#FFC900]"
-              placeholder="e.g. Chad MacBook Pro"
+              placeholder="e.g. MacBook Pro M3"
             />
           </div>
 
