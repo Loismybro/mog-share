@@ -22,7 +22,7 @@
 
 <br/>
 
-[**Live Demo**](https://github.com/Loismybro/mog-share) • [**Why It Mogs**](#-why-mog-share) • [**The Mogging Matrix**](#-the-mogging-matrix) • [**Quickstart (30s)**](#-quickstart-run-in-30-seconds) • [**How It Actually Works**](#-how-it-actually-works) • [**Roadmap**](#-roadmap)
+[**Live Demo**](https://loismybro.github.io/mog-share/) • [**Why It Mogs**](#-why-mog-share) • [**The Mogging Matrix**](#-the-mogging-matrix) • [**Quickstart (30s)**](#-quickstart-run-in-30-seconds) • [**How It Actually Works**](#-how-it-actually-works) • [**Roadmap**](#-roadmap)
 
 </div>
 
