@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { TacticalBackground } from './components/TacticalBackground';
 import { Header } from './components/Header';
+import { InstructionsPage } from './components/InstructionsPage';
 import { ModeSelector } from './components/ModeSelector';
 import { DeviceRadar } from './components/DeviceRadar';
 import { OnlineRoomCard } from './components/OnlineRoomCard';
@@ -32,6 +33,7 @@ export function App() {
 
   const [isClipboardOpen, setIsClipboardOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'transfer' | 'instructions'>('transfer');
 
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [transfers, setTransfers] = useState<TransferFile[]>([]);
@@ -433,38 +435,46 @@ export function App() {
           onOpenClipboard={() => setIsClipboardOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           deviceName={deviceName}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
         />
 
-        {/* Local vs Online Neo-Brutalist Switch */}
-        <ModeSelector currentMode={mode} onModeChange={setMode} />
+        {activeTab === 'transfer' ? (
+          <>
+            {/* Local vs Online Neo-Brutalist Switch */}
+            <ModeSelector currentMode={mode} onModeChange={setMode} />
 
-        {/* Central Radar or Online Room */}
-        {mode === 'local' ? (
-          <DeviceRadar
-            devices={localDevices}
-            selectedDeviceId={selectedDeviceId}
-            onSelectDevice={(device) => setSelectedDeviceId(device.id)}
-            myDeviceName={deviceName}
-            myPlatform={platform}
-          />
+            {/* Central Radar or Online Room */}
+            {mode === 'local' ? (
+              <DeviceRadar
+                devices={localDevices}
+                selectedDeviceId={selectedDeviceId}
+                onSelectDevice={(device) => setSelectedDeviceId(device.id)}
+                myDeviceName={deviceName}
+                myPlatform={platform}
+              />
+            ) : (
+              <OnlineRoomCard
+                roomCode={roomCode}
+                onCreateRoom={handleCreateRoom}
+                onJoinRoom={handleJoinRoom}
+                onLeaveRoom={handleLeaveRoom}
+                connectedRoomPeers={onlineRoomPeers}
+              />
+            )}
+
+            {/* Drag & Drop File Zone */}
+            <DropZone
+              files={stagedFiles}
+              onFilesChange={setStagedFiles}
+              targetDevice={currentTarget}
+              onSend={handleSendFiles}
+              isTransferring={isTransferring}
+            />
+          </>
         ) : (
-          <OnlineRoomCard
-            roomCode={roomCode}
-            onCreateRoom={handleCreateRoom}
-            onJoinRoom={handleJoinRoom}
-            onLeaveRoom={handleLeaveRoom}
-            connectedRoomPeers={onlineRoomPeers}
-          />
+          <InstructionsPage onBackToHub={() => setActiveTab('transfer')} />
         )}
-
-        {/* Drag & Drop File Zone */}
-        <DropZone
-          files={stagedFiles}
-          onFilesChange={setStagedFiles}
-          targetDevice={currentTarget}
-          onSend={handleSendFiles}
-          isTransferring={isTransferring}
-        />
       </div>
 
       {/* Floating Transfer Dock */}
