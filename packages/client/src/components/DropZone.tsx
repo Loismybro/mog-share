@@ -170,7 +170,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                   </span>
                 ) : (
                   <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-amber-400 ml-1 inline-block">
-                    Select Peer on Radar
+                    Select Target Peer
                   </span>
                 )}
               </div>

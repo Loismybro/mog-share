@@ -17,6 +17,8 @@ interface OnlineRoomCardProps {
   onJoinRoom: (code: string) => void;
   onLeaveRoom: () => void;
   connectedRoomPeers: Device[];
+  selectedDeviceId?: string | null;
+  onSelectDevice?: (peer: Device) => void;
 }
 
 export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
@@ -25,6 +27,8 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
   onJoinRoom,
   onLeaveRoom,
   connectedRoomPeers,
+  selectedDeviceId,
+  onSelectDevice,
 }) => {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [copied, setCopied] = useState(false);
@@ -135,16 +139,42 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                   Waiting for peer to enter 6-digit code or scan QR code...
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {connectedRoomPeers.map((peer) => (
-                    <span
-                      key={peer.id}
-                      className="neo-badge bg-[#1e2436] border-[#2a324b] text-white flex items-center gap-1.5 py-1 px-3 shadow-[2px_2px_0px_#000]"
-                    >
-                      <span className="w-2 h-2 rounded-full bg-[#00F59B] inline-block" />
-                      {peer.name}
-                    </span>
-                  ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {connectedRoomPeers.map((peer) => {
+                    const isSelected = selectedDeviceId === peer.id;
+                    return (
+                      <button
+                        key={peer.id}
+                        type="button"
+                        onClick={() => {
+                          sound.playPop();
+                          onSelectDevice?.(peer);
+                        }}
+                        className={`neo-box p-2.5 flex items-center justify-between text-left cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-[#1e2436] border-[#00F59B] text-white shadow-[3px_3px_0px_#000] -translate-y-0.5'
+                            : 'bg-[#151926] border-[#2a324b] text-slate-300 hover:border-[#3e4868]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 pr-1">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#00F59B] animate-pulse shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-white truncate m-0">{peer.name}</p>
+                            <p className="text-[10px] font-mono text-[#00F59B] m-0 font-bold">P2P Connected</p>
+                          </div>
+                        </div>
+                        {isSelected ? (
+                          <span className="neo-badge bg-[#00F59B] text-black text-[9px] py-0.5 px-1.5 shrink-0">
+                            TARGET
+                          </span>
+                        ) : (
+                          <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-300 text-[9px] py-0.5 px-1.5 shrink-0">
+                            SELECT
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

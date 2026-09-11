@@ -159,6 +159,85 @@ wss.on('connection', (ws: WebSocket, req) => {
           break;
         }
 
+        case 'transfer-request': {
+          const { targetPeerId, transferId, fileMeta } = payload;
+          const senderInfo = clients.get(ws);
+          for (const [clientWs, info] of clients.entries()) {
+            if (info.id === targetPeerId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'transfer-request',
+                payload: {
+                  fromPeer: {
+                    id: senderInfo?.id,
+                    name: senderInfo?.name,
+                    platform: senderInfo?.platform,
+                  },
+                  transferId,
+                  fileMeta
+                }
+              }));
+              break;
+            }
+          }
+          break;
+        }
+
+        case 'transfer-response': {
+          const { targetPeerId, transferId, accepted } = payload;
+          for (const [clientWs, info] of clients.entries()) {
+            if (info.id === targetPeerId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'transfer-response',
+                payload: { transferId, accepted }
+              }));
+              break;
+            }
+          }
+          break;
+        }
+
+        case 'file-chunk': {
+          const { targetPeerId, transferId, chunkIndex, totalChunks, data } = payload;
+          for (const [clientWs, info] of clients.entries()) {
+            if (info.id === targetPeerId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'file-chunk',
+                payload: { transferId, chunkIndex, totalChunks, data }
+              }));
+              break;
+            }
+          }
+          break;
+        }
+
+        case 'transfer-complete': {
+          const { targetPeerId, transferId } = payload;
+          for (const [clientWs, info] of clients.entries()) {
+            if (info.id === targetPeerId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'transfer-complete',
+                payload: { transferId }
+              }));
+              break;
+            }
+          }
+          break;
+        }
+
+        case 'transfer-cancel': {
+          const { targetPeerId, transferId } = payload;
+          for (const [clientWs, info] of clients.entries()) {
+            if (info.id === targetPeerId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'transfer-cancel',
+                payload: { transferId }
+              }));
+              break;
+            }
+          }
+          break;
+        }
+
         case 'leave-room': {
           const info = clients.get(ws);
           if (info && info.roomCode) {

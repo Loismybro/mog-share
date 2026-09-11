@@ -12,15 +12,34 @@ import { ClipboardSyncModal } from './components/ClipboardSyncModal';
 import { SettingsModal } from './components/SettingsModal';
 import { Device, ShareMode, TransferFile, ClipboardItem, Platform } from './types';
 import { sound } from './utils/audio';
-import { Download, Check, X, ShieldCheck } from 'lucide-react';
+import { Download, Check, X, ShieldCheck, Copy } from 'lucide-react';
 import { formatBytes } from './utils/formatters';
+
+function detectDefaultDevice(): { name: string; platform: Platform } {
+  const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '').toLowerCase();
+  if (/ipad/.test(ua)) return { name: 'Apple iPad', platform: 'ios' };
+  if (/iphone/.test(ua)) return { name: 'Apple iPhone', platform: 'ios' };
+  if (/android/.test(ua)) {
+    if (/samsung/.test(ua)) return { name: 'Samsung Galaxy', platform: 'android' };
+    if (/pixel/.test(ua)) return { name: 'Google Pixel', platform: 'android' };
+    return { name: 'Android Device', platform: 'android' };
+  }
+  if (/macintosh|mac os x/.test(ua)) return { name: 'MacBook', platform: 'macos' };
+  if (/windows/.test(ua)) return { name: 'Windows PC', platform: 'windows' };
+  if (/linux/.test(ua)) return { name: 'Linux Desktop', platform: 'linux' };
+  return { name: 'Web Browser', platform: 'macos' };
+}
 
 export function App() {
   const [deviceName, setDeviceName] = useState(() => {
-    return localStorage.getItem('mog_device_name') || "Alex's MacBook Pro";
+    const saved = localStorage.getItem('mog_device_name');
+    if (saved && saved !== "Alex's MacBook Pro") return saved;
+    return detectDefaultDevice().name;
   });
   const [platform, setPlatform] = useState<Platform>(() => {
-    return (localStorage.getItem('mog_platform') as Platform) || 'macos';
+    const saved = localStorage.getItem('mog_platform') as Platform;
+    if (saved) return saved;
+    return detectDefaultDevice().platform;
   });
   const [autoAccept, setAutoAccept] = useState(() => {
     return localStorage.getItem('mog_auto_accept') === 'true';
@@ -38,6 +57,7 @@ export function App() {
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const [transfers, setTransfers] = useState<TransferFile[]>([]);
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
+  const [clipboardToast, setClipboardToast] = useState<{ fromDevice: string; content: string } | null>(null);
 
   const [incomingPrompt, setIncomingPrompt] = useState<{
     fromPeer: Device;
@@ -50,35 +70,36 @@ export function App() {
     'mog_' + Math.random().toString(36).substring(2, 9)
   );
 
-  const [localDevices, setLocalDevices] = useState<Device[]>([
-    {
-      id: 'demo-iphone',
-      name: "Sarah's iPhone 16 Pro",
-      platform: 'ios',
-      isLocal: true,
-      status: 'online',
-    },
-    {
-      id: 'demo-pixel',
-      name: "Sam's Pixel 9 Pro",
-      platform: 'android',
-      isLocal: true,
-      status: 'online',
-    },
-    {
-      id: 'demo-linux',
-      name: 'Studio Linux Box',
-      platform: 'linux',
-      isLocal: true,
-      status: 'online',
-    },
-  ]);
-
+  const [localDevices, setLocalDevices] = useState<Device[]>([]);
   const [onlineRoomPeers, setOnlineRoomPeers] = useState<Device[]>([]);
+
+  // Buffers for receiving file chunks
+  const receivingBuffersRef = useRef<
+    Map<
+      string,
+      {
+        meta: { name: string; size: number; type: string };
+        chunks: string[];
+        totalChunks: number;
+        receivedCount: number;
+        startTime: number;
+      }
+    >
+  >(new Map());
+
+  // Files staged waiting for remote peer acceptance
+  const pendingOutgoingFilesRef = useRef<
+    Map<string, { file: File; targetPeerId: string }>
+  >(new Map());
+
+  // Active sender cancellation tokens
+  const activeSendersRef = useRef<Map<string, { cancelled: boolean }>>(new Map());
 
   useEffect(() => {
     sound.enabled = soundEnabled;
   }, [soundEnabled]);
+
+  // Main WebSocket Lifecycle
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -89,14 +110,16 @@ export function App() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({
-          type: 'register',
-          payload: {
-            id: myDeviceIdRef.current,
-            name: deviceName,
-            platform,
-          }
-        }));
+        ws.send(
+          JSON.stringify({
+            type: 'register',
+            payload: {
+              id: myDeviceIdRef.current,
+              name: deviceName,
+              platform,
+            },
+          })
+        );
       };
 
       ws.onmessage = (event) => {
@@ -110,6 +133,7 @@ export function App() {
                   if (prev.some((d) => d.id === dev.id)) return prev;
                   return [...prev, dev];
                 });
+                setSelectedDeviceId((curr) => curr || dev.id);
               }
               break;
             }
@@ -117,6 +141,7 @@ export function App() {
             case 'device-departed': {
               const { deviceId } = msg.payload;
               setLocalDevices((prev) => prev.filter((d) => d.id !== deviceId));
+              setSelectedDeviceId((curr) => (curr === deviceId ? null : curr));
               break;
             }
 
@@ -137,6 +162,7 @@ export function App() {
                   if (prev.some((p) => p.id === peer.id)) return prev;
                   return [...prev, peer];
                 });
+                setSelectedDeviceId((curr) => curr || peer.id);
                 sound.playFanfare();
               }
               break;
@@ -145,6 +171,7 @@ export function App() {
             case 'peer-left-room': {
               const { peerId } = msg.payload;
               setOnlineRoomPeers((prev) => prev.filter((p) => p.id !== peerId));
+              setSelectedDeviceId((curr) => (curr === peerId ? null : curr));
               break;
             }
 
@@ -159,20 +186,136 @@ export function App() {
                 },
                 ...prev,
               ]);
+              setClipboardToast({ fromDevice, content });
               sound.playFanfare();
               break;
             }
 
             case 'transfer-request': {
-              const { fromPeer, fileMeta } = msg.payload;
-              const transferId = 'transfer_' + Date.now();
-
+              const { fromPeer, fileMeta, transferId } = msg.payload;
               if (autoAccept) {
-                executeSimulatedReceive(fromPeer, fileMeta, transferId);
+                handleAcceptTransfer(fromPeer, fileMeta, transferId);
               } else {
                 sound.playFanfare();
                 setIncomingPrompt({ fromPeer, fileMeta, transferId });
               }
+              break;
+            }
+
+            case 'transfer-response': {
+              const { transferId, accepted } = msg.payload;
+              if (!accepted) {
+                setTransfers((prev) =>
+                  prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
+                );
+                pendingOutgoingFilesRef.current.delete(transferId);
+                break;
+              }
+              const pending = pendingOutgoingFilesRef.current.get(transferId);
+              if (pending) {
+                startStreamingFile(pending.file, pending.targetPeerId, transferId);
+              }
+              break;
+            }
+
+            case 'file-chunk': {
+              const { transferId, chunkIndex, totalChunks, data } = msg.payload;
+              const buffer = receivingBuffersRef.current.get(transferId);
+              if (buffer) {
+                if (!buffer.chunks[chunkIndex]) {
+                  buffer.chunks[chunkIndex] = data;
+                  buffer.receivedCount++;
+                }
+
+                const progress = Math.min(99, Math.round((buffer.receivedCount / totalChunks) * 100));
+                const elapsed = (Date.now() - buffer.startTime) / 1000;
+                const bytesSoFar = Math.min(
+                  buffer.meta.size,
+                  (buffer.receivedCount / totalChunks) * buffer.meta.size
+                );
+                const speed = elapsed > 0 ? bytesSoFar / elapsed : 0;
+                const remaining = buffer.meta.size - bytesSoFar;
+                const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
+
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === transferId
+                      ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
+                      : t
+                  )
+                );
+              }
+              break;
+            }
+
+            case 'transfer-complete': {
+              const { transferId } = msg.payload;
+              const buffer = receivingBuffersRef.current.get(transferId);
+              if (buffer) {
+                try {
+                  const byteArrays: BlobPart[] = [];
+                  for (let i = 0; i < buffer.totalChunks; i++) {
+                    const b64 = buffer.chunks[i] || '';
+                    const binaryStr = atob(b64);
+                    const len = binaryStr.length;
+                    const bytes = new Uint8Array(len);
+                    for (let j = 0; j < len; j++) {
+                      bytes[j] = binaryStr.charCodeAt(j);
+                    }
+                    byteArrays.push(bytes);
+                  }
+
+                  const fileBlob = new Blob(byteArrays, {
+                    type: buffer.meta.type || 'application/octet-stream',
+                  });
+                  const blobUrl = URL.createObjectURL(fileBlob);
+
+                  // Trigger automatic file download
+                  const a = document.createElement('a');
+                  a.href = blobUrl;
+                  a.download = buffer.meta.name;
+                  document.body.appendChild(a);
+                  a.click();
+                  setTimeout(() => {
+                    if (document.body.contains(a)) document.body.removeChild(a);
+                  }, 1000);
+
+                  setTransfers((prev) =>
+                    prev.map((t) =>
+                      t.id === transferId
+                        ? {
+                            ...t,
+                            progress: 100,
+                            status: 'completed',
+                            speedBytesPerSec: 0,
+                            etaSeconds: 0,
+                            blobUrl,
+                          }
+                        : t
+                    )
+                  );
+
+                  sound.playFanfare();
+                  confetti({
+                    particleCount: 70,
+                    spread: 80,
+                    origin: { y: 0.85 },
+                    colors: ['#00F59B', '#FFC900', '#60A5FA', '#FF90E8'],
+                  });
+                } catch (err) {
+                  console.error('Error assembling received file:', err);
+                }
+                receivingBuffersRef.current.delete(transferId);
+              }
+              break;
+            }
+
+            case 'transfer-cancel': {
+              const { transferId } = msg.payload;
+              setTransfers((prev) =>
+                prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
+              );
+              receivingBuffersRef.current.delete(transferId);
               break;
             }
           }
@@ -198,7 +341,7 @@ export function App() {
         setMode('online');
         setTimeout(() => {
           handleJoinRoom(code);
-        }, 400);
+        }, 500);
       }
     }
   }, []);
@@ -215,21 +358,14 @@ export function App() {
 
   const handleJoinRoom = (code: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'join-room',
-        payload: { roomCode: code }
-      }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'join-room',
+          payload: { roomCode: code },
+        })
+      );
     } else {
       setRoomCode(code);
-      setOnlineRoomPeers([
-        {
-          id: 'remote-peer-' + Math.random().toString(36).substring(2, 6),
-          name: 'Remote Peer Device',
-          platform: 'ios',
-          isLocal: false,
-          status: 'online',
-        }
-      ]);
     }
   };
 
@@ -244,10 +380,12 @@ export function App() {
 
   const handleBroadcastClipboard = (content: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'clipboard-broadcast',
-        payload: { content }
-      }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'clipboard-broadcast',
+          payload: { content },
+        })
+      );
     }
     setClipboardHistory((prev) => [
       {
@@ -276,7 +414,7 @@ export function App() {
     localStorage.setItem('mog_auto_accept', String(next));
   };
 
-  // Transfer Send Loop
+  // Real File Sending Loop
   const handleSendFiles = () => {
     if (stagedFiles.length === 0) return;
     const target = (mode === 'local' ? localDevices : onlineRoomPeers).find(
@@ -287,22 +425,17 @@ export function App() {
     sound.playPop();
 
     stagedFiles.forEach((file) => {
-      const transferId = 'tx_' + Math.random().toString(36).substring(2, 9);
-      const isLan = mode === 'local';
-      // Local: 95-125 MB/s, Online: 20-35 MB/s
-      const speed = isLan 
-        ? (95 + Math.random() * 30) * 1024 * 1024 
-        : (25 + Math.random() * 10) * 1024 * 1024;
-      const eta = Math.max(1, Math.round(file.size / speed));
+      const transferId = 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      pendingOutgoingFilesRef.current.set(transferId, { file, targetPeerId: target.id });
 
       const newTransfer: TransferFile = {
         id: transferId,
         name: file.name,
         size: file.size,
-        type: file.type,
+        type: file.type || 'application/octet-stream',
         progress: 0,
-        speedBytesPerSec: speed,
-        etaSeconds: eta,
+        speedBytesPerSec: 0,
+        etaSeconds: Math.max(1, Math.round(file.size / (30 * 1024 * 1024))),
         status: 'transferring',
         direction: 'sending',
         peerName: target.name,
@@ -311,83 +444,52 @@ export function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      let currentProgress = 0;
-      const interval = setInterval(() => {
-        currentProgress += Math.floor(Math.random() * 14) + 16;
-        if (currentProgress >= 100) {
-          currentProgress = 100;
-          clearInterval(interval);
-
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transferId
-                ? { ...t, progress: 100, status: 'completed', speedBytesPerSec: 0, etaSeconds: 0 }
-                : t
-            )
-          );
-
-          sound.playFanfare();
-          confetti({
-            particleCount: 60,
-            spread: 70,
-            origin: { y: 0.85 },
-            colors: ['#ff90e8', '#ffc900', '#00f59b', '#90b8f8'],
-          });
-        } else {
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === transferId
-                ? {
-                    ...t,
-                    progress: currentProgress,
-                    etaSeconds: Math.max(1, Math.round(((100 - currentProgress) / 100) * eta)),
-                  }
-                : t
-            )
-          );
-        }
-      }, 220);
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'transfer-request',
+            payload: {
+              targetPeerId: target.id,
+              transferId,
+              fileMeta: {
+                name: file.name,
+                size: file.size,
+                type: file.type || 'application/octet-stream',
+              },
+            },
+          })
+        );
+      }
     });
 
     setStagedFiles([]);
   };
 
-  const executeSimulatedReceive = (
-    peer: Device,
-    meta: { name: string; size: number; type: string },
-    transferId: string
-  ) => {
-    const speed = (100 + Math.random() * 20) * 1024 * 1024;
-    const eta = Math.max(1, Math.round(meta.size / speed));
+  // Stream File in Real Binary Chunks
+  const startStreamingFile = (file: File, targetPeerId: string, transferId: string) => {
+    const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    let chunkIndex = 0;
+    const startTime = Date.now();
+    const token = { cancelled: false };
+    activeSendersRef.current.set(transferId, token);
 
-    const dummyBlob = new Blob(['MOG-SHARE ultra-speed payload contents'], {
-      type: meta.type || 'application/octet-stream',
-    });
-    const blobUrl = URL.createObjectURL(dummyBlob);
+    const sendNextChunk = () => {
+      if (token.cancelled) return;
 
-    const newTransfer: TransferFile = {
-      id: transferId,
-      name: meta.name,
-      size: meta.size,
-      type: meta.type,
-      progress: 0,
-      speedBytesPerSec: speed,
-      etaSeconds: eta,
-      status: 'transferring',
-      direction: 'receiving',
-      peerName: peer.name,
-      blobUrl,
-      createdAt: Date.now(),
-    };
+      if (chunkIndex >= totalChunks) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'transfer-complete',
+              payload: {
+                targetPeerId,
+                transferId,
+              },
+            })
+          );
+        }
 
-    setTransfers((prev) => [newTransfer, ...prev]);
-
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.floor(Math.random() * 15) + 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
         setTransfers((prev) =>
           prev.map((t) =>
             t.id === transferId
@@ -396,17 +498,135 @@ export function App() {
           )
         );
         sound.playFanfare();
-      } else {
+        confetti({
+          particleCount: 60,
+          spread: 70,
+          origin: { y: 0.85 },
+          colors: ['#ff90e8', '#ffc900', '#00f59b', '#90b8f8'],
+        });
+        activeSendersRef.current.delete(transferId);
+        pendingOutgoingFilesRef.current.delete(transferId);
+        return;
+      }
+
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const slice = file.slice(start, end);
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        if (token.cancelled) return;
+        const resultStr = reader.result as string;
+        const base64Data = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'file-chunk',
+              payload: {
+                targetPeerId,
+                transferId,
+                chunkIndex,
+                totalChunks,
+                data: base64Data,
+              },
+            })
+          );
+        }
+
+        chunkIndex++;
+        const progress = Math.min(99, Math.round((chunkIndex / totalChunks) * 100));
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed = elapsed > 0 ? end / elapsed : 0;
+        const remaining = file.size - end;
+        const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
+
         setTransfers((prev) =>
           prev.map((t) =>
-            t.id === transferId ? { ...t, progress } : t
+            t.id === transferId
+              ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
+              : t
           )
         );
-      }
-    }, 200);
+
+        setTimeout(sendNextChunk, 2);
+      };
+
+      reader.readAsDataURL(slice);
+    };
+
+    sendNextChunk();
+  };
+
+  const handleAcceptTransfer = (
+    fromPeer: Device,
+    fileMeta: { name: string; size: number; type: string },
+    transferId: string
+  ) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'transfer-response',
+          payload: {
+            targetPeerId: fromPeer.id,
+            transferId,
+            accepted: true,
+          },
+        })
+      );
+    }
+
+    const CHUNK_SIZE = 64 * 1024;
+    const totalChunks = Math.max(1, Math.ceil(fileMeta.size / CHUNK_SIZE));
+    receivingBuffersRef.current.set(transferId, {
+      meta: fileMeta,
+      chunks: new Array(totalChunks),
+      totalChunks,
+      receivedCount: 0,
+      startTime: Date.now(),
+    });
+
+    const newTransfer: TransferFile = {
+      id: transferId,
+      name: fileMeta.name,
+      size: fileMeta.size,
+      type: fileMeta.type,
+      progress: 0,
+      speedBytesPerSec: 0,
+      etaSeconds: Math.max(1, Math.round(fileMeta.size / (30 * 1024 * 1024))),
+      status: 'transferring',
+      direction: 'receiving',
+      peerName: fromPeer.name,
+      createdAt: Date.now(),
+    };
+
+    setTransfers((prev) => [newTransfer, ...prev]);
+    setIncomingPrompt(null);
+  };
+
+  const handleDeclineTransfer = (fromPeer: Device, transferId: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'transfer-response',
+          payload: {
+            targetPeerId: fromPeer.id,
+            transferId,
+            accepted: false,
+          },
+        })
+      );
+    }
+    setIncomingPrompt(null);
   };
 
   const handleCancelTransfer = (id: string) => {
+    const senderToken = activeSendersRef.current.get(id);
+    if (senderToken) {
+      senderToken.cancelled = true;
+      activeSendersRef.current.delete(id);
+    }
+    receivingBuffersRef.current.delete(id);
     setTransfers((prev) =>
       prev.map((t) => (t.id === id ? { ...t, status: 'cancelled' } : t))
     );
@@ -422,10 +642,35 @@ export function App() {
 
   return (
     <div className="min-h-screen pb-28 flex flex-col justify-between tactical-canvas-bg text-slate-100 selection:bg-[#FFC900] selection:text-black relative overflow-hidden">
-      {/* Tactical Ambient Geometric Background */}
       <TacticalBackground />
 
-      {/* Main Container */}
+      {/* Real-time Clipboard Toast Alert */}
+      {clipboardToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 animate-pop max-w-md w-full px-4">
+          <div className="neo-box p-3.5 bg-[#131722] border-3 border-[#00F59B] shadow-[6px_6px_0px_#000] flex items-center justify-between gap-3 text-white">
+            <div className="min-w-0 flex-1">
+              <span className="neo-badge bg-[#00F59B] text-black text-[9px] py-0 px-1.5 inline-block mb-1">
+                CLIPBOARD FROM {clipboardToast.fromDevice.toUpperCase()}
+              </span>
+              <p className="text-xs font-mono font-bold text-slate-200 truncate m-0">
+                "{clipboardToast.content}"
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(clipboardToast.content);
+                sound.playPop();
+                setClipboardToast(null);
+              }}
+              className="neo-btn neo-btn-mint px-3 py-1.5 text-xs font-black uppercase text-black shrink-0 flex items-center gap-1"
+            >
+              <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Copy</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <div>
         <Header
           mode={mode}
@@ -441,10 +686,8 @@ export function App() {
 
         {activeTab === 'transfer' ? (
           <>
-            {/* Local vs Online Neo-Brutalist Switch */}
             <ModeSelector currentMode={mode} onModeChange={setMode} />
 
-            {/* Central Radar or Online Room */}
             {mode === 'local' ? (
               <DeviceRadar
                 devices={localDevices}
@@ -460,10 +703,11 @@ export function App() {
                 onJoinRoom={handleJoinRoom}
                 onLeaveRoom={handleLeaveRoom}
                 connectedRoomPeers={onlineRoomPeers}
+                selectedDeviceId={selectedDeviceId}
+                onSelectDevice={(peer) => setSelectedDeviceId(peer.id)}
               />
             )}
 
-            {/* Drag & Drop File Zone */}
             <DropZone
               files={stagedFiles}
               onFilesChange={setStagedFiles}
@@ -477,14 +721,12 @@ export function App() {
         )}
       </div>
 
-      {/* Floating Transfer Dock */}
       <TransferDock
         transfers={transfers}
         onCancelTransfer={handleCancelTransfer}
         onClearCompleted={handleClearCompleted}
       />
 
-      {/* Incoming Transfer Alert */}
       {incomingPrompt && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-pop">
           <div className="neo-box p-6 max-w-sm w-full bg-[#131722] border-3 border-[#2a324b] shadow-[8px_8px_0px_#000] text-center text-white">
@@ -515,7 +757,7 @@ export function App() {
               <button
                 onClick={() => {
                   sound.playPop();
-                  setIncomingPrompt(null);
+                  handleDeclineTransfer(incomingPrompt.fromPeer, incomingPrompt.transferId);
                 }}
                 className="neo-btn neo-btn-dark flex-1 py-3 text-xs font-black uppercase"
               >
@@ -526,12 +768,11 @@ export function App() {
               <button
                 onClick={() => {
                   sound.playPop();
-                  executeSimulatedReceive(
+                  handleAcceptTransfer(
                     incomingPrompt.fromPeer,
                     incomingPrompt.fileMeta,
                     incomingPrompt.transferId
                   );
-                  setIncomingPrompt(null);
                 }}
                 className="neo-btn neo-btn-mint flex-1 py-3 text-xs font-black uppercase text-black"
               >
@@ -543,7 +784,6 @@ export function App() {
         </div>
       )}
 
-      {/* Universal Clipboard Modal */}
       <ClipboardSyncModal
         isOpen={isClipboardOpen}
         onClose={() => setIsClipboardOpen(false)}
@@ -551,7 +791,6 @@ export function App() {
         receivedItems={clipboardHistory}
       />
 
-      {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -563,7 +802,6 @@ export function App() {
         onToggleAutoAccept={handleToggleAutoAccept}
       />
 
-      {/* Minimal Tactical Footer */}
       <footer className="w-full text-center py-5 text-xs font-mono font-bold text-slate-500 relative z-10">
         <div className="flex items-center justify-center gap-4">
           <span className="uppercase text-slate-300">MOG-SHARE CORE ENGINE</span>
