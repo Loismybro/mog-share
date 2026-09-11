@@ -1,47 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --neo-bg: #f5f0e6;
-  --neo-black: #000000;
-  --neo-pink: #ff90e8;
-  --neo-yellow: #ffc900;
-  --neo-mint: #23a094;
-  --neo-mint-bright: #00f59b;
-  --neo-blue: #90b8f8;
-  --neo-coral: #ff6b6b;
-  --neo-purple: #d3b5ff;
+  --canvas-dark: #0b0d13;
+  --surface-1: #131722;
+  --surface-2: #1a1f2e;
+  --surface-3: #22293d;
+  --border-dark: #2a324b;
+  --border-hard: #000000;
+  --accent-yellow: #ffc900;
+  --accent-mint: #00f59b;
+  --accent-pink: #ff90e8;
+  --accent-blue: #60a5fa;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--neo-bg);
-  color: var(--neo-black);
+  background-color: var(--canvas-dark);
+  color: var(--text-main);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow-x: hidden;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Warm Dot-Matrix Canvas (Authentic Gumroad Paper Texture) */
-.gumroad-canvas-bg {
-  background-color: #f5f0e6;
-  background-image: radial-gradient(rgba(0, 0, 0, 0.12) 1.5px, transparent 1.5px);
-  background-size: 24px 24px;
+/* Premium Tactical Dark Canvas Background */
+.tactical-canvas-bg {
+  background-color: #0b0d13;
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 36px 36px;
+  position: relative;
 }
 
-/* Neo-Brutalist Containers (Gumroad / Colourmaxxing) */
+/* Neo-Brutalist Matte Dark Containers */
 .neo-box {
-  background-color: #fffdf9;
-  border: 3.5px solid #000000;
+  background-color: #131722;
+  border: 3px solid #2a324b;
   box-shadow: 6px 6px 0px #000000;
   border-radius: 20px;
-  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+.neo-box:hover {
+  border-color: #3e4868;
 }
 
 .neo-box-interactive:hover {
   transform: translate(-2px, -2px);
   box-shadow: 8px 8px 0px #000000;
+  border-color: #52608a;
 }
 
 .neo-box-interactive:active {
@@ -49,9 +61,9 @@ body {
   box-shadow: 2px 2px 0px #000000;
 }
 
-/* Chunky Tactile Buttons */
+/* Tactical Neo-Brutalist Buttons */
 .neo-btn {
-  border: 3px solid #000000;
+  border: 2.5px solid #000000;
   font-weight: 800;
   box-shadow: 4px 4px 0px #000000;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
@@ -73,20 +85,12 @@ body {
   box-shadow: 1px 1px 0px #000000;
 }
 
-.neo-btn-pink {
-  background-color: #ff90e8;
-  color: #000000;
-}
-.neo-btn-pink:hover {
-  background-color: #ff75e3;
-}
-
 .neo-btn-yellow {
   background-color: #ffc900;
   color: #000000;
 }
 .neo-btn-yellow:hover {
-  background-color: #ffbe00;
+  background-color: #ffd42a;
 }
 
 .neo-btn-mint {
@@ -94,72 +98,75 @@ body {
   color: #000000;
 }
 .neo-btn-mint:hover {
-  background-color: #00e08d;
+  background-color: #24fdb0;
 }
 
-.neo-btn-blue {
-  background-color: #90b8f8;
+.neo-btn-pink {
+  background-color: #ff90e8;
   color: #000000;
 }
-.neo-btn-blue:hover {
-  background-color: #79a8f7;
+.neo-btn-pink:hover {
+  background-color: #ffa3ec;
 }
 
-.neo-btn-black {
-  background-color: #000000;
-  color: #ffffff;
+.neo-btn-dark {
+  background-color: #1e2436;
+  color: #f8fafc;
+  border-color: #000000;
 }
-.neo-btn-black:hover {
-  background-color: #1a1a1a;
+.neo-btn-dark:hover {
+  background-color: #283048;
 }
 
-/* Neo-Brutalist Sticker Badges */
+/* Tactical Badges */
 .neo-badge {
-  border: 2.5px solid #000000;
+  border: 2px solid #000000;
   font-family: ui-monospace, monospace;
   font-weight: 900;
   text-transform: uppercase;
   font-size: 0.75rem;
-  padding: 0.25rem 0.65rem;
-  border-radius: 10px;
-  box-shadow: 3px 3px 0px #000000;
+  padding: 0.2rem 0.6rem;
+  border-radius: 8px;
+  box-shadow: 2px 2px 0px #000000;
   letter-spacing: 0.05em;
   white-space: nowrap;
 }
 
-/* Subtle Floating Animations */
+/* Animations */
 @keyframes float-slow {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-5px); }
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(1deg); }
 }
 
-.animate-float {
-  animation: float-slow 4s ease-in-out infinite;
+.animate-float-slow {
+  animation: float-slow 6s ease-in-out infinite;
+}
+
+@keyframes float-reverse {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(8px) rotate(-1deg); }
+}
+
+.animate-float-reverse {
+  animation: float-reverse 7s ease-in-out infinite;
+}
+
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.animate-sweep {
+  animation: radar-sweep 4.5s linear infinite;
 }
 
 @keyframes pop-in {
-  0% { transform: scale(0.95); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+  0% { transform: scale(0.96) translateY(12px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
 }
 
 .animate-pop {
-  animation: pop-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-/* Marquee Ribbon */
-@keyframes marquee {
-  0% { transform: translateX(0%); }
-  100% { transform: translateX(-50%); }
-}
-
-.marquee-track {
-  display: flex;
-  width: 200%;
-  animation: marquee 24s linear infinite;
-}
-
-.marquee-track:hover {
-  animation-play-state: paused;
+  animation: pop-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Striped Progress Bar for Transfer Dock */
@@ -171,45 +178,35 @@ body {
 .striped-progress {
   background-image: linear-gradient(
     45deg,
-    rgba(0, 0, 0, 0.18) 25%,
+    rgba(0, 0, 0, 0.25) 25%,
     transparent 25%,
     transparent 50%,
-    rgba(0, 0, 0, 0.18) 50%,
-    rgba(0, 0, 0, 0.18) 75%,
+    rgba(0, 0, 0, 0.25) 50%,
+    rgba(0, 0, 0, 0.25) 75%,
     transparent 75%,
     transparent
   );
   background-size: 40px 40px;
-  animation: stripes 1.2s linear infinite;
+  animation: stripes 1s linear infinite;
 }
 
-/* Radar Rotating Beam */
-@keyframes radar-sweep {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.animate-sweep {
-  animation: radar-sweep 5s linear infinite;
-}
-
-/* Custom Neo-Brutalist Scrollbar */
+/* Custom Tactical Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f5f0e6;
-  border-left: 2px solid #000;
+  background: #0b0d13;
+  border-left: 2px solid #1a1f2e;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #ffc900;
+  background: #2a324b;
   border: 2px solid #000;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #ff90e8;
+  background: #ffc900;
 }

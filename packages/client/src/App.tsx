@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import { MarqueeTicker } from './components/MarqueeTicker';
+import { TacticalBackground } from './components/TacticalBackground';
 import { Header } from './components/Header';
 import { ModeSelector } from './components/ModeSelector';
 import { DeviceRadar } from './components/DeviceRadar';
@@ -419,9 +419,9 @@ export function App() {
   const isTransferring = transfers.some((t) => t.status === 'transferring');
 
   return (
-    <div className="min-h-screen pb-28 flex flex-col justify-between gumroad-canvas-bg selection:bg-[#FFC900] selection:text-black">
-      {/* Top Warning Ribbon Marquee */}
-      <MarqueeTicker />
+    <div className="min-h-screen pb-28 flex flex-col justify-between tactical-canvas-bg text-slate-100 selection:bg-[#FFC900] selection:text-black relative overflow-hidden">
+      {/* Tactical Ambient Geometric Background */}
+      <TacticalBackground />
 
       {/* Main Container */}
       <div>
@@ -476,8 +476,8 @@ export function App() {
 
       {/* Incoming Transfer Alert */}
       {incomingPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="neo-box p-6 max-w-sm w-full bg-white border-3 border-black shadow-[8px_8px_0px_#000] text-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-pop">
+          <div className="neo-box p-6 max-w-sm w-full bg-[#131722] border-3 border-[#2a324b] shadow-[8px_8px_0px_#000] text-center text-white">
             <div className="w-14 h-14 rounded-2xl bg-[#00F59B] border-3 border-black shadow-[3px_3px_0px_#000] flex items-center justify-center mx-auto mb-3">
               <Download className="w-7 h-7 text-black stroke-[2.5] animate-bounce" />
             </div>
@@ -485,18 +485,18 @@ export function App() {
             <span className="neo-badge bg-[#FFC900] text-black mb-2 inline-block">
               INCOMING TRANSFER
             </span>
-            <h4 className="text-base font-black uppercase text-black m-0">
+            <h4 className="text-base font-black uppercase text-white m-0 font-mono">
               Incoming Payload
             </h4>
-            <p className="text-xs font-medium text-slate-700 mt-1 mb-4">
-              <strong className="text-black font-black">{incomingPrompt.fromPeer.name}</strong> wants to send you:
+            <p className="text-xs font-medium text-slate-400 mt-1 mb-4">
+              <strong className="text-white font-bold">{incomingPrompt.fromPeer.name}</strong> wants to send:
             </p>
 
-            <div className="p-3 rounded-xl bg-slate-50 border-2 border-black text-xs text-left mb-5 shadow-[2px_2px_0px_#000]">
-              <p className="font-black text-black truncate m-0">
+            <div className="p-3 rounded-xl bg-[#1a1f2e] border-2 border-[#2a324b] text-xs text-left mb-5 shadow-[2px_2px_0px_#000]">
+              <p className="font-bold text-white truncate m-0">
                 {incomingPrompt.fileMeta.name}
               </p>
-              <p className="text-[11px] text-slate-600 font-mono font-bold m-0 mt-0.5">
+              <p className="text-[11px] text-slate-400 font-mono font-bold m-0 mt-0.5">
                 {formatBytes(incomingPrompt.fileMeta.size)} • Direct P2P
               </p>
             </div>
@@ -507,7 +507,7 @@ export function App() {
                   sound.playPop();
                   setIncomingPrompt(null);
                 }}
-                className="neo-btn bg-slate-100 hover:bg-rose-100 flex-1 py-3 text-xs font-black uppercase"
+                className="neo-btn neo-btn-dark flex-1 py-3 text-xs font-black uppercase"
               >
                 <X className="w-4 h-4 stroke-[3]" />
                 <span>Decline</span>
@@ -523,7 +523,7 @@ export function App() {
                   );
                   setIncomingPrompt(null);
                 }}
-                className="neo-btn neo-btn-mint flex-1 py-3 text-xs font-black uppercase"
+                className="neo-btn neo-btn-mint flex-1 py-3 text-xs font-black uppercase text-black"
               >
                 <Check className="w-4 h-4 stroke-[3]" />
                 <span>Accept</span>
@@ -553,14 +553,14 @@ export function App() {
         onToggleAutoAccept={handleToggleAutoAccept}
       />
 
-      {/* Footer */}
-      <footer className="w-full text-center py-4 text-xs font-bold text-slate-600">
+      {/* Minimal Tactical Footer */}
+      <footer className="w-full text-center py-5 text-xs font-mono font-bold text-slate-500 relative z-10">
         <div className="flex items-center justify-center gap-4">
-          <span className="font-mono uppercase font-black text-black">MOG-SHARE CORE</span>
+          <span className="uppercase text-slate-300">MOG-SHARE CORE ENGINE</span>
           <span>•</span>
           <span className="flex items-center gap-1">
-            <ShieldCheck className="w-4 h-4 text-emerald-700 stroke-[2.5]" />
-            <span className="text-black">0% Cloud Storage • 100% P2P Local & WAN</span>
+            <ShieldCheck className="w-4 h-4 text-[#00F59B] stroke-[2.5]" />
+            <span className="text-slate-400">0% Cloud Storage • 100% P2P</span>
           </span>
         </div>
       </footer>

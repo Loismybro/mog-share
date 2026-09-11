@@ -64,19 +64,19 @@ export const DropZone: React.FC<DropZoneProps> = ({
   };
 
   const getFileIcon = (file: File) => {
-    if (file.type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-emerald-600" />;
-    if (file.type.startsWith('video/')) return <Film className="w-4 h-4 text-purple-600" />;
-    if (file.type.includes('pdf') || file.type.includes('text')) return <FileText className="w-4 h-4 text-blue-600" />;
+    if (file.type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-[#00F59B]" />;
+    if (file.type.startsWith('video/')) return <Film className="w-4 h-4 text-[#FF90E8]" />;
+    if (file.type.includes('pdf') || file.type.includes('text')) return <FileText className="w-4 h-4 text-[#60A5FA]" />;
     if (file.name.endsWith('.zip') || file.name.endsWith('.tar') || file.name.endsWith('.gz')) {
-      return <Archive className="w-4 h-4 text-amber-600" />;
+      return <Archive className="w-4 h-4 text-[#FFC900]" />;
     }
-    return <File className="w-4 h-4 text-slate-700" />;
+    return <File className="w-4 h-4 text-slate-400" />;
   };
 
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
   return (
-    <div className="w-full max-w-xl mx-auto px-4 mb-8">
+    <div className="w-full max-w-xl mx-auto px-4 mb-8 relative z-10 animate-pop">
       <input
         type="file"
         ref={fileInputRef}
@@ -89,49 +89,49 @@ export const DropZone: React.FC<DropZoneProps> = ({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`neo-box p-6 border-dashed border-3 transition-all duration-150 ${
+        className={`neo-box p-6 border-dashed border-3 transition-all duration-200 bg-[#131722] ${
           isDragOver
-            ? 'bg-amber-100 border-black shadow-[8px_8px_0px_#000] scale-[1.01]'
-            : 'bg-white border-black hover:shadow-[7px_7px_0px_#000]'
+            ? 'border-[#00F59B] bg-[#1a2335] shadow-[8px_8px_0px_#000] scale-[1.01]'
+            : 'border-[#2a324b] hover:border-[#3e4868] shadow-[6px_6px_0px_#000]'
         }`}
       >
         {files.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-[#FF90E8] border-3 border-black shadow-[3px_3px_0px_#000] flex items-center justify-center mb-3">
-              <UploadCloud className="w-8 h-8 text-black stroke-[2.5]" />
+            <div className="w-14 h-14 rounded-2xl bg-[#1e2436] border-2 border-[#2a324b] shadow-[3px_3px_0px_#000] flex items-center justify-center mb-3">
+              <UploadCloud className="w-8 h-8 text-[#FFC900] stroke-[2.5]" />
             </div>
-            <h3 className="text-base font-black uppercase text-black m-0">
-              Drag & Drop Any Files Here
+            <h3 className="text-base font-black uppercase text-white m-0 font-mono">
+              Drag & Drop Files Here
             </h3>
-            <p className="text-xs font-bold text-slate-600 mt-1 mb-4">
-              Direct P2P Chunk Streaming • No File Size Limits
+            <p className="text-xs font-bold text-slate-400 mt-1 mb-4">
+              Direct P2P Chunk Streaming • No Cloud Size Limits
             </p>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="neo-btn neo-btn-yellow px-5 py-2.5 text-xs font-black uppercase"
+              className="neo-btn neo-btn-yellow px-5 py-2.5 text-xs font-black uppercase text-black"
             >
               Browse Local Files
             </button>
           </div>
         ) : (
           <div>
-            <div className="flex items-center justify-between pb-3 border-b-2 border-black mb-3">
+            <div className="flex items-center justify-between pb-3 border-b-2 border-[#2a324b] mb-3">
               <span className="neo-badge bg-[#FFC900] text-black">
                 QUEUED ({files.length} • {formatBytes(totalBytes)})
               </span>
-              <div className="flex gap-2 text-xs font-bold">
+              <div className="flex gap-2 text-xs font-bold font-mono">
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="text-blue-600 hover:underline cursor-pointer"
+                  className="text-[#60A5FA] hover:underline cursor-pointer"
                 >
-                  + Add More
+                  + ADD MORE
                 </button>
-                <span>•</span>
+                <span className="text-slate-600">•</span>
                 <button
                   onClick={() => onFilesChange([])}
-                  className="text-rose-600 hover:underline cursor-pointer"
+                  className="text-rose-400 hover:underline cursor-pointer"
                 >
-                  Clear All
+                  CLEAR ALL
                 </button>
               </div>
             </div>
@@ -141,18 +141,18 @@ export const DropZone: React.FC<DropZoneProps> = ({
               {files.map((file, idx) => (
                 <div
                   key={`${file.name}-${idx}`}
-                  className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border-2 border-black text-xs shadow-[2px_2px_0px_#000]"
+                  className="flex items-center justify-between p-2.5 rounded-xl bg-[#1a1f2e] border-2 border-[#2a324b] text-xs shadow-[2px_2px_0px_#000]"
                 >
                   <div className="flex items-center gap-2.5 min-w-0 pr-2">
                     {getFileIcon(file)}
-                    <span className="truncate max-w-[240px] font-bold text-black">{file.name}</span>
-                    <span className="text-[11px] text-slate-500 font-mono font-bold">
+                    <span className="truncate max-w-[240px] font-bold text-slate-200">{file.name}</span>
+                    <span className="text-[11px] text-slate-400 font-mono font-bold">
                       {formatBytes(file.size)}
                     </span>
                   </div>
                   <button
                     onClick={() => removeFile(idx)}
-                    className="p-1 rounded-md hover:bg-rose-100 text-black cursor-pointer"
+                    className="p-1 rounded-md hover:bg-[#283048] text-slate-400 hover:text-rose-400 cursor-pointer"
                   >
                     <X className="w-4 h-4 stroke-[3]" />
                   </button>
@@ -161,15 +161,15 @@ export const DropZone: React.FC<DropZoneProps> = ({
             </div>
 
             {/* Send CTA */}
-            <div className="mt-4 pt-3 border-t-2 border-black flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="text-xs font-bold">
+            <div className="mt-4 pt-3 border-t-2 border-[#2a324b] flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-xs font-bold text-slate-300">
                 Target:{' '}
                 {targetDevice ? (
                   <span className="neo-badge bg-[#00F59B] text-black ml-1 inline-block">
                     {targetDevice.name}
                   </span>
                 ) : (
-                  <span className="neo-badge bg-[#FF6B6B] text-white ml-1 inline-block">
+                  <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-amber-400 ml-1 inline-block">
                     Select Peer on Radar
                   </span>
                 )}
@@ -178,10 +178,10 @@ export const DropZone: React.FC<DropZoneProps> = ({
               <button
                 onClick={onSend}
                 disabled={!targetDevice || isTransferring}
-                className="neo-btn neo-btn-pink w-full sm:w-auto px-6 py-3 text-xs font-black uppercase disabled:opacity-40"
+                className="neo-btn neo-btn-mint w-full sm:w-auto px-6 py-3 text-xs font-black uppercase text-black disabled:opacity-40"
               >
                 <Send className="w-4 h-4 stroke-[3]" />
-                <span>{isTransferring ? 'Mogging (Transferring)...' : 'Send Files Now'}</span>
+                <span>{isTransferring ? 'Transferring...' : 'Send Files Now'}</span>
               </button>
             </div>
           </div>
