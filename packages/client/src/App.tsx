@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { TacticalBackground } from './components/TacticalBackground';
 import { Header } from './components/Header';
@@ -30,6 +30,15 @@ function detectDefaultDevice(): { name: string; platform: Platform } {
   return { name: 'Web Browser', platform: 'macos' };
 }
 
+function getPersistentDeviceId(): string {
+  let id = localStorage.getItem('mog_device_id');
+  if (!id) {
+    id = 'mog_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36).substring(4);
+    localStorage.setItem('mog_device_id', id);
+  }
+  return id;
+}
+
 export function App() {
   const [deviceName, setDeviceName] = useState(() => {
     const saved = localStorage.getItem('mog_device_name');
@@ -46,8 +55,22 @@ export function App() {
   });
   const [soundEnabled, setSoundEnabled] = useState(true);
 
-  const [mode, setMode] = useState<ShareMode>('local');
-  const [roomCode, setRoomCode] = useState<string | null>(null);
+  // Initialize room & mode from URL hash or sessionStorage
+  const getInitialRoomAndMode = () => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const hashRoom = hash.startsWith('#room=') ? hash.replace('#room=', '').trim() : null;
+    const sessionRoom = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mog_room_code') : null;
+    const code = hashRoom || sessionRoom || null;
+    return {
+      code,
+      mode: (code ? 'online' : 'local') as ShareMode,
+    };
+  };
+
+  const initialSetup = getInitialRoomAndMode();
+  const [mode, setMode] = useState<ShareMode>(initialSetup.mode);
+  const [roomCode, setRoomCode] = useState<string | null>(initialSetup.code);
+  const [roomError, setRoomError] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
   const [isClipboardOpen, setIsClipboardOpen] = useState(false);
@@ -65,21 +88,33 @@ export function App() {
     transferId: string;
   } | null>(null);
 
+  const myDeviceIdRef = useRef<string>(getPersistentDeviceId());
   const wsRef = useRef<WebSocket | null>(null);
-  const myDeviceIdRef = useRef<string>(
-    'mog_' + Math.random().toString(36).substring(2, 9)
-  );
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const pendingRoomJoinRef = useRef<string | null>(initialSetup.code);
+
+  const deviceNameRef = useRef(deviceName);
+  deviceNameRef.current = deviceName;
+  const platformRef = useRef(platform);
+  platformRef.current = platform;
+  const autoAcceptRef = useRef(autoAccept);
+  autoAcceptRef.current = autoAccept;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const roomCodeRef = useRef(roomCode);
+  roomCodeRef.current = roomCode;
 
   const [localDevices, setLocalDevices] = useState<Device[]>([]);
   const [onlineRoomPeers, setOnlineRoomPeers] = useState<Device[]>([]);
 
-  // Buffers for receiving file chunks
+  // Buffers for receiving file chunks as typed Uint8Arrays
   const receivingBuffersRef = useRef<
     Map<
       string,
       {
         meta: { name: string; size: number; type: string };
-        chunks: string[];
+        chunks: (Uint8Array | undefined)[];
         totalChunks: number;
         receivedCount: number;
         startTime: number;
@@ -99,41 +134,79 @@ export function App() {
     sound.enabled = soundEnabled;
   }, [soundEnabled]);
 
-  // Main WebSocket Lifecycle
-  useEffect(() => {
+  // Robust, Auto-Reconnecting WebSocket Engine
+  const connectWebSocket = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
-    let ws: WebSocket;
 
     try {
-      ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        console.log('[MOG-SHARE] WebSocket Connected');
+        reconnectAttemptsRef.current = 0;
+
+        // 1. Register persistent device ID
         ws.send(
           JSON.stringify({
             type: 'register',
             payload: {
               id: myDeviceIdRef.current,
-              name: deviceName,
-              platform,
+              name: deviceNameRef.current,
+              platform: platformRef.current,
             },
           })
         );
+
+        // 2. Automatically restore or join pending room
+        const codeToJoin = pendingRoomJoinRef.current || roomCodeRef.current;
+        if (codeToJoin) {
+          console.log(`[MOG-SHARE] Auto-joining room: ${codeToJoin}`);
+          ws.send(
+            JSON.stringify({
+              type: 'join-room',
+              payload: { roomCode: codeToJoin },
+            })
+          );
+        }
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
           switch (msg.type) {
+            case 'pong':
+              break;
+
+            case 'error': {
+              console.warn('[MOG-SHARE Server Error]:', msg.payload?.message);
+              setRoomError(msg.payload?.message || 'Room error occurred');
+              break;
+            }
+
             case 'device-discovered': {
               const dev = msg.payload.device;
               if (dev.id !== myDeviceIdRef.current) {
                 setLocalDevices((prev) => {
-                  if (prev.some((d) => d.id === dev.id)) return prev;
-                  return [...prev, dev];
+                  const filtered = prev.filter((d) => d.id !== dev.id);
+                  return [...filtered, dev];
                 });
-                setSelectedDeviceId((curr) => curr || dev.id);
+                if (modeRef.current === 'local') {
+                  setSelectedDeviceId((curr) => curr || dev.id);
+                }
               }
               break;
             }
@@ -141,17 +214,48 @@ export function App() {
             case 'device-departed': {
               const { deviceId } = msg.payload;
               setLocalDevices((prev) => prev.filter((d) => d.id !== deviceId));
-              setSelectedDeviceId((curr) => (curr === deviceId ? null : curr));
+              if (modeRef.current === 'local') {
+                setSelectedDeviceId((curr) => (curr === deviceId ? null : curr));
+              }
               break;
             }
 
             case 'room-created': {
-              setRoomCode(msg.payload.roomCode);
+              const code = msg.payload.roomCode;
+              setRoomCode(code);
+              setRoomError(null);
+              sessionStorage.setItem('mog_room_code', code);
+              window.location.hash = `#room=${code}`;
+              pendingRoomJoinRef.current = null;
+              sound.playPop();
               break;
             }
 
             case 'room-joined': {
-              setRoomCode(msg.payload.roomCode);
+              const code = msg.payload.roomCode;
+              setRoomCode(code);
+              setRoomError(null);
+              sessionStorage.setItem('mog_room_code', code);
+              window.location.hash = `#room=${code}`;
+              pendingRoomJoinRef.current = null;
+              sound.playPop();
+              break;
+            }
+
+            case 'room-peers': {
+              const { peers } = msg.payload;
+              if (Array.isArray(peers)) {
+                setOnlineRoomPeers(peers);
+                if (peers.length > 0) {
+                  setSelectedDeviceId((curr) => {
+                    if (!curr || !peers.some((p: Device) => p.id === curr)) {
+                      return peers[0].id;
+                    }
+                    return curr;
+                  });
+                  sound.playFanfare();
+                }
+              }
               break;
             }
 
@@ -159,10 +263,11 @@ export function App() {
               const { peer } = msg.payload;
               if (peer && peer.id !== myDeviceIdRef.current) {
                 setOnlineRoomPeers((prev) => {
-                  if (prev.some((p) => p.id === peer.id)) return prev;
-                  return [...prev, peer];
+                  const filtered = prev.filter((p) => p.id !== peer.id);
+                  return [...filtered, peer];
                 });
-                setSelectedDeviceId((curr) => curr || peer.id);
+                // Auto-select the newly joined peer
+                setSelectedDeviceId(peer.id);
                 sound.playFanfare();
               }
               break;
@@ -193,7 +298,7 @@ export function App() {
 
             case 'transfer-request': {
               const { fromPeer, fileMeta, transferId } = msg.payload;
-              if (autoAccept) {
+              if (autoAcceptRef.current) {
                 handleAcceptTransfer(fromPeer, fileMeta, transferId);
               } else {
                 sound.playFanfare();
@@ -223,7 +328,14 @@ export function App() {
               const buffer = receivingBuffersRef.current.get(transferId);
               if (buffer) {
                 if (!buffer.chunks[chunkIndex]) {
-                  buffer.chunks[chunkIndex] = data;
+                  // Decode Base64 chunk to Uint8Array directly to conserve mobile RAM
+                  const binaryStr = atob(data);
+                  const len = binaryStr.length;
+                  const bytes = new Uint8Array(len);
+                  for (let j = 0; j < len; j++) {
+                    bytes[j] = binaryStr.charCodeAt(j);
+                  }
+                  buffer.chunks[chunkIndex] = bytes;
                   buffer.receivedCount++;
                 }
 
@@ -253,19 +365,9 @@ export function App() {
               const buffer = receivingBuffersRef.current.get(transferId);
               if (buffer) {
                 try {
-                  const byteArrays: BlobPart[] = [];
-                  for (let i = 0; i < buffer.totalChunks; i++) {
-                    const b64 = buffer.chunks[i] || '';
-                    const binaryStr = atob(b64);
-                    const len = binaryStr.length;
-                    const bytes = new Uint8Array(len);
-                    for (let j = 0; j < len; j++) {
-                      bytes[j] = binaryStr.charCodeAt(j);
-                    }
-                    byteArrays.push(bytes);
-                  }
-
-                  const fileBlob = new Blob(byteArrays, {
+                  // Assembled directly from pre-decoded typed Uint8Array chunks
+                  const validChunks = buffer.chunks.filter((c): c is Uint8Array => Boolean(c));
+                  const fileBlob = new Blob(validChunks as unknown as BlobPart[], {
                     type: buffer.meta.type || 'application/octet-stream',
                   });
                   const blobUrl = URL.createObjectURL(fileBlob);
@@ -323,49 +425,122 @@ export function App() {
           console.error('Error parsing ws event:', e);
         }
       };
+
+      ws.onclose = () => {
+        console.warn('[MOG-SHARE] WebSocket Closed. Scheduling reconnect...');
+        wsRef.current = null;
+        const delay = Math.min(5000, 500 * Math.pow(1.5, reconnectAttemptsRef.current));
+        reconnectAttemptsRef.current++;
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connectWebSocket();
+        }, delay);
+      };
+
+      ws.onerror = () => {
+        if (wsRef.current) wsRef.current.close();
+      };
     } catch {
-      // WS error guard
-    }
-
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-    };
-  }, [deviceName, platform, autoAccept]);
-
-  // Handle URL hash on load (e.g. #room=482-901)
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (hash.startsWith('#room=')) {
-      const code = hash.replace('#room=', '');
-      if (code) {
-        setMode('online');
-        setTimeout(() => {
-          handleJoinRoom(code);
-        }, 500);
-      }
+      // WS constructor error guard
     }
   }, []);
 
+  // Initialize WebSocket once on mount
+  useEffect(() => {
+    connectWebSocket();
+
+    // Ping interval to keep connection alive on cellular / Cloudflare tunnels
+    const pingInterval = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 15000);
+
+    // Reconnect immediately when mobile browser tab resumes from file picker or background
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (
+          !wsRef.current ||
+          wsRef.current.readyState === WebSocket.CLOSED ||
+          wsRef.current.readyState === WebSocket.CLOSING
+        ) {
+          console.log('[MOG-SHARE] Tab resumed visible, reconnecting socket...');
+          connectWebSocket();
+        }
+      }
+    };
+
+    const handleOnline = () => {
+      console.log('[MOG-SHARE] Device back online, reconnecting socket...');
+      connectWebSocket();
+    };
+
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#room=')) {
+        const code = hash.replace('#room=', '').trim();
+        if (code && code !== roomCodeRef.current) {
+          setMode('online');
+          handleJoinRoom(code);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('hashchange', handleHashChange);
+
+    return () => {
+      clearInterval(pingInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('hashchange', handleHashChange);
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [connectWebSocket]);
+
+  // Mode change handler with target auto-selection
+  const handleModeChange = (newMode: ShareMode) => {
+    setMode(newMode);
+    if (newMode === 'online') {
+      if (onlineRoomPeers.length > 0) {
+        setSelectedDeviceId(onlineRoomPeers[0].id);
+      }
+    } else {
+      if (localDevices.length > 0) {
+        setSelectedDeviceId(localDevices[0].id);
+      }
+    }
+  };
+
   const handleCreateRoom = () => {
+    setRoomError(null);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'create-room' }));
     } else {
-      const part1 = Math.floor(100 + Math.random() * 900);
-      const part2 = Math.floor(100 + Math.random() * 900);
-      setRoomCode(`${part1}-${part2}`);
+      connectWebSocket();
     }
   };
 
   const handleJoinRoom = (code: string) => {
+    setRoomError(null);
+    const cleanCode = code.trim();
+    if (!cleanCode) return;
+
+    pendingRoomJoinRef.current = cleanCode;
+    sessionStorage.setItem('mog_room_code', cleanCode);
+    window.location.hash = `#room=${cleanCode}`;
+    setRoomCode(cleanCode);
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: 'join-room',
-          payload: { roomCode: code },
+          payload: { roomCode: cleanCode },
         })
       );
     } else {
-      setRoomCode(code);
+      connectWebSocket();
     }
   };
 
@@ -375,6 +550,9 @@ export function App() {
     }
     setRoomCode(null);
     setOnlineRoomPeers([]);
+    setRoomError(null);
+    pendingRoomJoinRef.current = null;
+    sessionStorage.removeItem('mog_room_code');
     window.location.hash = '';
   };
 
@@ -401,11 +579,35 @@ export function App() {
   const handleSaveDeviceName = (name: string) => {
     setDeviceName(name);
     localStorage.setItem('mog_device_name', name);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'register',
+          payload: {
+            id: myDeviceIdRef.current,
+            name,
+            platform,
+          },
+        })
+      );
+    }
   };
 
   const handleSavePlatform = (p: Platform) => {
     setPlatform(p);
     localStorage.setItem('mog_platform', p);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'register',
+          payload: {
+            id: myDeviceIdRef.current,
+            name: deviceName,
+            platform: p,
+          },
+        })
+      );
+    }
   };
 
   const handleToggleAutoAccept = () => {
@@ -414,7 +616,7 @@ export function App() {
     localStorage.setItem('mog_auto_accept', String(next));
   };
 
-  // Real File Sending Loop
+  // Real File Sending Loop with Target Validation
   const handleSendFiles = () => {
     if (stagedFiles.length === 0) return;
     const target = (mode === 'local' ? localDevices : onlineRoomPeers).find(
@@ -465,7 +667,7 @@ export function App() {
     setStagedFiles([]);
   };
 
-  // Stream File in Real Binary Chunks
+  // Stream File in Real Binary Chunks with Backpressure Control
   const startStreamingFile = (file: File, targetPeerId: string, transferId: string) => {
     const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
@@ -476,6 +678,12 @@ export function App() {
 
     const sendNextChunk = () => {
       if (token.cancelled) return;
+
+      // Mobile backpressure guard: pause reading if WebSocket buffer exceeds 128KB
+      if (wsRef.current && wsRef.current.bufferedAmount > 128 * 1024) {
+        setTimeout(sendNextChunk, 20);
+        return;
+      }
 
       if (chunkIndex >= totalChunks) {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -657,6 +865,7 @@ export function App() {
               </p>
             </div>
             <button
+              type="button"
               onClick={() => {
                 navigator.clipboard.writeText(clipboardToast.content);
                 sound.playPop();
@@ -686,7 +895,7 @@ export function App() {
 
         {activeTab === 'transfer' ? (
           <>
-            <ModeSelector currentMode={mode} onModeChange={setMode} />
+            <ModeSelector currentMode={mode} onModeChange={handleModeChange} />
 
             {mode === 'local' ? (
               <DeviceRadar
@@ -705,6 +914,8 @@ export function App() {
                 connectedRoomPeers={onlineRoomPeers}
                 selectedDeviceId={selectedDeviceId}
                 onSelectDevice={(peer) => setSelectedDeviceId(peer.id)}
+                errorMessage={roomError}
+                onClearError={() => setRoomError(null)}
               />
             )}
 
@@ -755,6 +966,7 @@ export function App() {
 
             <div className="flex gap-2.5">
               <button
+                type="button"
                 onClick={() => {
                   sound.playPop();
                   handleDeclineTransfer(incomingPrompt.fromPeer, incomingPrompt.transferId);
@@ -766,6 +978,7 @@ export function App() {
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   sound.playPop();
                   handleAcceptTransfer(

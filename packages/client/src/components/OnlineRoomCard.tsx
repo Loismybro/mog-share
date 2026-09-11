@@ -6,10 +6,15 @@ import {
   ArrowRight, 
   Share2, 
   Users, 
-  QrCode as QrIcon 
+  QrCode as QrIcon,
+  AlertCircle,
+  Laptop,
+  Smartphone,
+  Monitor,
+  Terminal
 } from 'lucide-react';
 import { sound } from '../utils/audio';
-import { Device } from '../types';
+import { Device, Platform } from '../types';
 
 interface OnlineRoomCardProps {
   roomCode: string | null;
@@ -19,6 +24,8 @@ interface OnlineRoomCardProps {
   connectedRoomPeers: Device[];
   selectedDeviceId?: string | null;
   onSelectDevice?: (peer: Device) => void;
+  errorMessage?: string | null;
+  onClearError?: () => void;
 }
 
 export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
@@ -29,6 +36,8 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
   connectedRoomPeers,
   selectedDeviceId,
   onSelectDevice,
+  errorMessage,
+  onClearError,
 }) => {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [copied, setCopied] = useState(false);
@@ -60,18 +69,68 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Smart input formatter: auto-hyphenates 6 digits into XXX-XXX
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onClearError?.();
+    const raw = e.target.value;
+    const digitsOnly = raw.replace(/[^\w-]/g, '').toUpperCase();
+    
+    // If user types raw digits like 123456, format as 123-456
+    const cleanDigits = digitsOnly.replace(/-/g, '');
+    if (cleanDigits.length > 3) {
+      setJoinCodeInput(`${cleanDigits.slice(0, 3)}-${cleanDigits.slice(3, 6)}`);
+    } else {
+      setJoinCodeInput(digitsOnly.slice(0, 7));
+    }
+  };
+
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinCodeInput.trim()) return;
+    const trimmed = joinCodeInput.trim();
+    if (!trimmed) return;
     sound.playPop();
-    onJoinRoom(joinCodeInput.trim());
-    setJoinCodeInput('');
+    onJoinRoom(trimmed);
+  };
+
+  const getPlatformIcon = (platform: Platform) => {
+    switch (platform) {
+      case 'ios':
+      case 'android':
+        return <Smartphone className="w-4 h-4 text-[#00F59B]" />;
+      case 'macos':
+        return <Laptop className="w-4 h-4 text-[#60A5FA]" />;
+      case 'windows':
+        return <Monitor className="w-4 h-4 text-[#FFC900]" />;
+      case 'linux':
+        return <Terminal className="w-4 h-4 text-[#D3B5FF]" />;
+      default:
+        return <Laptop className="w-4 h-4 text-slate-300" />;
+    }
   };
 
   return (
     <div className="w-full max-w-xl mx-auto px-4 mb-6 relative z-10 animate-pop">
       <div className="neo-box p-6 bg-[#131722] border-3 border-[#2a324b] text-white">
         
+        {/* Error Notification Banner */}
+        {errorMessage && (
+          <div className="mb-4 p-3 rounded-xl bg-rose-950/80 border-2 border-rose-500 text-rose-200 text-xs flex items-center justify-between gap-2 shadow-[2px_2px_0px_#000] animate-pop">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 stroke-[2.5]" />
+              <span className="font-bold font-mono">{errorMessage}</span>
+            </div>
+            {onClearError && (
+              <button
+                type="button"
+                onClick={onClearError}
+                className="text-rose-300 hover:text-white font-black text-sm px-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
+
         {roomCode ? (
           <div>
             <div className="flex items-center justify-between pb-4 border-b-2 border-[#2a324b]">
@@ -79,13 +138,17 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                 <span className="neo-badge bg-[#FFC900] text-black">
                   ACTIVE P2P ROOM
                 </span>
+                <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-[#00F59B] text-[10px] hidden sm:inline-block">
+                  Direct Relay
+                </span>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   sound.playPop();
                   onLeaveRoom();
                 }}
-                className="neo-badge bg-[#FF6B6B] text-white hover:bg-red-600 cursor-pointer"
+                className="neo-badge bg-[#FF6B6B] text-white hover:bg-red-600 cursor-pointer transition-colors"
               >
                 Leave Room
               </button>
@@ -97,13 +160,14 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                 {roomCode}
               </div>
               <p className="text-xs font-bold text-slate-400 mt-3 text-center">
-                Share this 6-digit code or scan the QR to connect any remote phone or computer.
+                Share this 6-digit code or scan the QR to connect any remote phone, Android, or computer.
               </p>
             </div>
 
             {/* Actions: Copy Link & Show QR */}
             <div className="flex items-center justify-center gap-3">
               <button
+                type="button"
                 onClick={handleCopy}
                 className="neo-btn neo-btn-yellow px-4 py-2.5 text-xs font-bold"
               >
@@ -112,6 +176,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   sound.playPop();
                   setShowQrModal(true);
@@ -130,13 +195,22 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                   <Users className="w-4 h-4 stroke-[2.5] text-[#00F59B]" />
                   <span>Room Peers ({connectedRoomPeers.length})</span>
                 </span>
-                <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-[#00F59B] text-[10px]">
-                  E2EE P2P
-                </span>
+                {connectedRoomPeers.length > 0 && (
+                  <span className="neo-badge bg-[#1e2436] border-[#00F59B] text-[#00F59B] text-[10px] animate-pulse">
+                    CONNECTED
+                  </span>
+                )}
               </div>
+
               {connectedRoomPeers.length === 0 ? (
-                <div className="p-3 rounded-xl border-2 border-dashed border-[#2a324b] text-center text-xs font-medium text-slate-500 italic bg-[#0e111a]">
-                  Waiting for peer to enter 6-digit code or scan QR code...
+                <div className="p-4 rounded-xl border-2 border-dashed border-[#2a324b] text-center text-xs font-medium text-slate-400 bg-[#0e111a] space-y-1">
+                  <div className="flex items-center justify-center gap-2 text-amber-400 font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping inline-block" />
+                    Waiting for remote device to join room {roomCode}...
+                  </div>
+                  <p className="text-[11px] text-slate-500 m-0">
+                    Open this URL on your second device or enter code <span className="text-white font-mono font-bold">{roomCode}</span>
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -150,25 +224,30 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                           sound.playPop();
                           onSelectDevice?.(peer);
                         }}
-                        className={`neo-box p-2.5 flex items-center justify-between text-left cursor-pointer transition-all ${
+                        className={`neo-box p-3 flex items-center justify-between text-left cursor-pointer transition-all ${
                           isSelected
-                            ? 'bg-[#1e2436] border-[#00F59B] text-white shadow-[3px_3px_0px_#000] -translate-y-0.5'
+                            ? 'bg-[#1e2436] border-[#00F59B] text-white shadow-[4px_4px_0px_#000] -translate-y-0.5'
                             : 'bg-[#151926] border-[#2a324b] text-slate-300 hover:border-[#3e4868]'
                         }`}
                       >
-                        <div className="flex items-center gap-2 min-w-0 pr-1">
-                          <span className="w-2.5 h-2.5 rounded-full bg-[#00F59B] animate-pulse shrink-0" />
+                        <div className="flex items-center gap-2.5 min-w-0 pr-1">
+                          <div className="p-1.5 rounded-lg bg-[#0e111a] border border-[#2a324b]">
+                            {getPlatformIcon(peer.platform)}
+                          </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-white truncate m-0">{peer.name}</p>
-                            <p className="text-[10px] font-mono text-[#00F59B] m-0 font-bold">P2P Connected</p>
+                            <p className="text-[10px] font-mono text-[#00F59B] m-0 font-bold flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#00F59B] inline-block" />
+                              Ready To Transfer
+                            </p>
                           </div>
                         </div>
                         {isSelected ? (
-                          <span className="neo-badge bg-[#00F59B] text-black text-[9px] py-0.5 px-1.5 shrink-0">
-                            TARGET
+                          <span className="neo-badge bg-[#00F59B] text-black text-[9px] py-0.5 px-2 shrink-0">
+                            TARGET READY
                           </span>
                         ) : (
-                          <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-300 text-[9px] py-0.5 px-1.5 shrink-0">
+                          <span className="neo-badge bg-[#1e2436] border-[#2a324b] text-slate-300 text-[9px] py-0.5 px-2 shrink-0">
                             SELECT
                           </span>
                         )}
@@ -189,7 +268,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                 P2P Room Connection
               </h3>
               <p className="text-xs font-medium text-slate-400 mt-1 m-0">
-                Transfer files with any device in another city or on mobile 5G without size caps.
+                Transfer files with any phone, Android, iPhone, or PC anywhere across networks.
               </p>
             </div>
 
@@ -199,7 +278,8 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
                 type="text"
                 placeholder="Enter 6-digit code (e.g. 748-291)"
                 value={joinCodeInput}
-                onChange={(e) => setJoinCodeInput(e.target.value)}
+                onChange={handleInputChange}
+                maxLength={7}
                 className="flex-1 px-4 py-3 rounded-xl border-3 border-[#2a324b] bg-[#0e111a] text-white text-sm font-mono font-bold tracking-wider placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:border-[#FFC900] shadow-[3px_3px_0px_#000]"
               />
               <button
@@ -220,6 +300,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
 
             {/* Create Room Button */}
             <button
+              type="button"
               onClick={() => {
                 sound.playPop();
                 onCreateRoom();
@@ -255,6 +336,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
               </div>
 
               <button
+                type="button"
                 onClick={() => {
                   sound.playPop();
                   setShowQrModal(false);

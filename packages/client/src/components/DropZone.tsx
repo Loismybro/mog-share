@@ -55,6 +55,8 @@ export const DropZone: React.FC<DropZoneProps> = ({
       sound.playPop();
       const selected = Array.from(e.target.files);
       onFilesChange([...files, ...selected]);
+      // Reset input value so re-selecting the same file works seamlessly
+      e.target.value = '';
     }
   };
 
@@ -77,12 +79,15 @@ export const DropZone: React.FC<DropZoneProps> = ({
 
   return (
     <div className="w-full max-w-xl mx-auto px-4 mb-8 relative z-10 animate-pop">
+      {/* Accessible off-screen native file input with explicit ID to prevent Android Activity detachment */}
       <input
         type="file"
+        id="mog-native-file-input"
         ref={fileInputRef}
         onChange={handleFileInputChange}
         multiple
-        className="hidden"
+        className="sr-only"
+        tabIndex={-1}
       />
 
       <div
@@ -97,21 +102,23 @@ export const DropZone: React.FC<DropZoneProps> = ({
       >
         {files.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-[#1e2436] border-2 border-[#2a324b] shadow-[3px_3px_0px_#000] flex items-center justify-center mb-3">
-              <UploadCloud className="w-8 h-8 text-[#FFC900] stroke-[2.5]" />
-            </div>
-            <h3 className="text-base font-black uppercase text-white m-0 font-mono">
-              Drag & Drop Files Here
-            </h3>
-            <p className="text-xs font-bold text-slate-400 mt-1 mb-4">
-              Direct P2P Chunk Streaming • No Cloud Size Limits
-            </p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="neo-btn neo-btn-yellow px-5 py-2.5 text-xs font-black uppercase text-black"
+            <label
+              htmlFor="mog-native-file-input"
+              className="cursor-pointer group flex flex-col items-center justify-center w-full"
             >
-              Browse Local Files
-            </button>
+              <div className="w-14 h-14 rounded-2xl bg-[#1e2436] border-2 border-[#2a324b] shadow-[3px_3px_0px_#000] flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                <UploadCloud className="w-8 h-8 text-[#FFC900] stroke-[2.5]" />
+              </div>
+              <h3 className="text-base font-black uppercase text-white m-0 font-mono">
+                Drag & Drop or Tap To Choose Files
+              </h3>
+              <p className="text-xs font-bold text-slate-400 mt-1 mb-4">
+                Direct P2P Chunk Streaming • No Cloud Size Limits
+              </p>
+              <span className="neo-btn neo-btn-yellow px-5 py-2.5 text-xs font-black uppercase text-black select-none pointer-events-none">
+                Browse Files (Photos, Videos, Any)
+              </span>
+            </label>
           </div>
         ) : (
           <div>
@@ -120,14 +127,15 @@ export const DropZone: React.FC<DropZoneProps> = ({
                 QUEUED ({files.length} • {formatBytes(totalBytes)})
               </span>
               <div className="flex gap-2 text-xs font-bold font-mono">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-[#60A5FA] hover:underline cursor-pointer"
+                <label
+                  htmlFor="mog-native-file-input"
+                  className="text-[#60A5FA] hover:underline cursor-pointer select-none"
                 >
                   + ADD MORE
-                </button>
+                </label>
                 <span className="text-slate-600">•</span>
                 <button
+                  type="button"
                   onClick={() => onFilesChange([])}
                   className="text-rose-400 hover:underline cursor-pointer"
                 >
@@ -151,6 +159,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                     </span>
                   </div>
                   <button
+                    type="button"
                     onClick={() => removeFile(idx)}
                     className="p-1 rounded-md hover:bg-[#283048] text-slate-400 hover:text-rose-400 cursor-pointer"
                   >
@@ -176,6 +185,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
               </div>
 
               <button
+                type="button"
                 onClick={onSend}
                 disabled={!targetDevice || isTransferring}
                 className="neo-btn neo-btn-mint w-full sm:w-auto px-6 py-3 text-xs font-black uppercase text-black disabled:opacity-40"
