@@ -23,6 +23,7 @@ interface HeaderProps {
   activeTab: 'transfer' | 'instructions';
   onTabChange: (tab: 'transfer' | 'instructions') => void;
   wsStatus?: 'connected' | 'connecting' | 'disconnected';
+  networkMode?: 'server' | 'mesh' | 'offline';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   onTabChange,
   wsStatus = 'connected',
+  networkMode = 'mesh',
 }) => {
   return (
     <header className="w-full max-w-5xl mx-auto pt-6 px-4 mb-6 relative z-10 animate-pop">
@@ -98,7 +100,9 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className={`w-1.5 h-1.5 rounded-full ${
                   wsStatus === 'connected' ? 'bg-[#00F59B]' : wsStatus === 'connecting' ? 'bg-amber-400' : 'bg-rose-500'
                 }`} />
-                {wsStatus === 'connected' ? 'Server Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                {wsStatus === 'connected'
+                  ? networkMode === 'server' ? 'Server Live' : 'Mesh Live'
+                  : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'}
               </button>
             </div>
           </div>

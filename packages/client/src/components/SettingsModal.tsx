@@ -21,6 +21,10 @@ interface SettingsModalProps {
   onSavePlatform: (platform: Platform) => void;
   autoAccept: boolean;
   onToggleAutoAccept: () => void;
+  wsStatus?: 'connected' | 'connecting' | 'disconnected';
+  networkMode?: 'server' | 'mesh' | 'offline';
+  lanHash?: string;
+  publicIp?: string;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -32,6 +36,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSavePlatform,
   autoAccept,
   onToggleAutoAccept,
+  wsStatus = 'connected',
+  networkMode = 'mesh',
+  lanHash,
+  publicIp,
 }) => {
   const [nameInput, setNameInput] = useState(deviceName);
   const [serverInput, setServerInput] = useState(() => localStorage.getItem('mog_custom_ws_url') || '');
@@ -162,20 +170,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
+          {/* Active Network Diagnostics */}
+          <div className="p-3 rounded-xl border-2 border-[#2a324b] bg-[#161a28] shadow-[2px_2px_0px_#000]">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-black uppercase text-slate-300 font-mono">
+                Network Protocol
+              </span>
+              <span className={`inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
+                wsStatus === 'connected'
+                  ? 'bg-emerald-950/80 border-emerald-500/60 text-[#00F59B]'
+                  : wsStatus === 'connecting'
+                  ? 'bg-amber-950/80 border-amber-500/60 text-amber-300'
+                  : 'bg-rose-950/80 border-rose-500/60 text-rose-300'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  wsStatus === 'connected' ? 'bg-[#00F59B]' : wsStatus === 'connecting' ? 'bg-amber-400' : 'bg-rose-500'
+                }`} />
+                {wsStatus === 'connected'
+                  ? networkMode === 'server' ? 'Custom Server' : 'Cloud Mesh Active'
+                  : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-400 space-y-0.5">
+              <p className="m-0 flex items-center justify-between">
+                <span>Relay Engine:</span>
+                <span className="text-slate-200 font-bold">
+                  {serverInput ? 'Custom WebSocket' : 'Zero-Config Mesh (WSS Relay)'}
+                </span>
+              </p>
+              {lanHash && (
+                <p className="m-0 flex items-center justify-between">
+                  <span>LAN Subnet Node:</span>
+                  <span className="text-[#FFC900] font-bold">{lanHash}</span>
+                </p>
+              )}
+              {publicIp && (
+                <p className="m-0 flex items-center justify-between">
+                  <span>Public IP Mask:</span>
+                  <span className="text-slate-300 font-bold">{publicIp.slice(0, 7)}***</span>
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Custom Signaling Relay (Optional) */}
           <div>
-            <label className="text-xs font-bold text-slate-400 block mb-1 uppercase font-mono">
-              Signaling Relay Server (Optional)
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-400 uppercase font-mono">
+                Signaling Relay Server (Optional)
+              </label>
+              {serverInput && (
+                <button
+                  type="button"
+                  onClick={() => setServerInput('')}
+                  className="text-[10px] font-mono text-[#60A5FA] hover:underline cursor-pointer"
+                >
+                  Reset to Auto Mesh
+                </button>
+              )}
+            </div>
             <input
               type="text"
               value={serverInput}
               onChange={(e) => setServerInput(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl border-3 border-[#2a324b] bg-[#0e111a] text-white text-xs font-mono shadow-[2px_2px_0px_#000] focus:outline-none focus:border-[#FFC900]"
-              placeholder="e.g. wss://relay.your-domain.com/ws"
+              placeholder="e.g. wss://relay.your-domain.com/ws (leave blank for Auto Mesh)"
             />
             <span className="text-[10px] text-slate-500 block mt-1 font-mono">
-              Leave blank to use default host. Useful when hosting client on GitHub Pages.
+              Leave blank to automatically use the high-speed Cloud Mesh (100% free, works on GitHub Pages).
             </span>
           </div>
 

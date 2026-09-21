@@ -14,6 +14,7 @@ import { Device, ShareMode, TransferFile, ClipboardItem, Platform } from './type
 import { sound } from './utils/audio';
 import { Download, Check, X, ShieldCheck, Copy } from 'lucide-react';
 import { formatBytes } from './utils/formatters';
+import { NetworkService } from './services/network';
 
 function detectDefaultDevice(): { name: string; platform: Platform } {
   const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '').toLowerCase();
@@ -56,7 +57,12 @@ export function App() {
     } catch {}
     return defName;
   });
+
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting');
+  const [networkMode, setNetworkMode] = useState<'server' | 'mesh' | 'offline'>('mesh');
+  const [lanHash, setLanHash] = useState<string>('local_default');
+  const [publicIp, setPublicIp] = useState<string>('');
+
   const [platform, setPlatform] = useState<Platform>(() => {
     const saved = localStorage.getItem('mog_platform') as Platform;
     if (saved) return saved;
@@ -99,21 +105,22 @@ export function App() {
   } | null>(null);
 
   const myDeviceIdRef = useRef<string>(getPersistentDeviceId());
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const reconnectAttemptsRef = useRef(0);
+  const networkRef = useRef<NetworkService | null>(null);
   const pendingRoomJoinRef = useRef<string | null>(initialSetup.code);
 
   const deviceNameRef = useRef(deviceName);
-  deviceNameRef.current = deviceName;
   const platformRef = useRef(platform);
-  platformRef.current = platform;
   const autoAcceptRef = useRef(autoAccept);
-  autoAcceptRef.current = autoAccept;
   const modeRef = useRef(mode);
-  modeRef.current = mode;
   const roomCodeRef = useRef(roomCode);
-  roomCodeRef.current = roomCode;
+
+  useEffect(() => {
+    deviceNameRef.current = deviceName;
+    platformRef.current = platform;
+    autoAcceptRef.current = autoAccept;
+    modeRef.current = mode;
+    roomCodeRef.current = roomCode;
+  }, [deviceName, platform, autoAccept, mode, roomCode]);
 
   const [localDevices, setLocalDevices] = useState<Device[]>([]);
   const [onlineRoomPeers, setOnlineRoomPeers] = useState<Device[]>([]);
@@ -144,366 +151,336 @@ export function App() {
     sound.enabled = soundEnabled;
   }, [soundEnabled]);
 
-  // Robust, Auto-Reconnecting WebSocket Engine
-  const connectWebSocket = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+  // Stream File in Real Binary Chunks with Backpressure Control
+  const startStreamingFile = useCallback((file: File, targetPeerId: string, transferId: string) => {
+    const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    let chunkIndex = 0;
+    const startTime = Date.now();
+    const token = { cancelled: false };
+    activeSendersRef.current.set(transferId, token);
 
-    if (
-      wsRef.current &&
-      (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)
-    ) {
-      return;
-    }
+    const sendNextChunk = () => {
+      if (token.cancelled) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const params = new URLSearchParams(window.location.search);
-    const customWs = params.get('ws') || 
-                     localStorage.getItem('mog_custom_ws_url') || 
-                     (import.meta.env.VITE_WS_URL as string | undefined);
+      if (chunkIndex >= totalChunks) {
+        networkRef.current?.sendTransferComplete(targetPeerId, transferId);
 
-    const wsUrl = customWs ? customWs : `${protocol}//${window.location.host}/ws`;
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId
+              ? { ...t, progress: 100, status: 'completed', speedBytesPerSec: 0, etaSeconds: 0 }
+              : t
+          )
+        );
+        sound.playFanfare();
+        confetti({
+          particleCount: 60,
+          spread: 70,
+          origin: { y: 0.85 },
+          colors: ['#ff90e8', '#ffc900', '#00f59b', '#90b8f8'],
+        });
+        activeSendersRef.current.delete(transferId);
+        pendingOutgoingFilesRef.current.delete(transferId);
+        return;
+      }
 
-    setWsStatus('connecting');
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const slice = file.slice(start, end);
+      const reader = new FileReader();
 
-      ws.onopen = () => {
-        console.log('[MOG-SHARE] WebSocket Connected');
-        setWsStatus('connected');
-        reconnectAttemptsRef.current = 0;
+      reader.onload = () => {
+        if (token.cancelled) return;
+        const resultStr = reader.result as string;
+        const base64Data = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
 
-        // 1. Register persistent device ID
-        ws.send(
-          JSON.stringify({
-            type: 'register',
-            payload: {
-              id: myDeviceIdRef.current,
-              name: deviceNameRef.current,
-              platform: platformRef.current,
-            },
-          })
+        networkRef.current?.sendFileChunk(
+          targetPeerId,
+          transferId,
+          chunkIndex,
+          totalChunks,
+          base64Data
         );
 
-        // 2. Automatically restore or join pending room
-        const codeToJoin = pendingRoomJoinRef.current || roomCodeRef.current;
-        if (codeToJoin) {
-          console.log(`[MOG-SHARE] Auto-joining room: ${codeToJoin}`);
-          ws.send(
-            JSON.stringify({
-              type: 'join-room',
-              payload: { roomCode: codeToJoin },
-            })
-          );
-        }
+        chunkIndex++;
+        const progress = Math.min(99, Math.round((chunkIndex / totalChunks) * 100));
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed = elapsed > 0 ? end / elapsed : 0;
+        const remaining = file.size - end;
+        const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
+
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId
+              ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
+              : t
+          )
+        );
+
+        setTimeout(sendNextChunk, 2);
       };
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          switch (msg.type) {
-            case 'pong':
-              break;
-
-            case 'error': {
-              console.warn('[MOG-SHARE Server Error]:', msg.payload?.message);
-              setRoomError(msg.payload?.message || 'Room error occurred');
-              setRoomCode(null);
-              roomCodeRef.current = null;
-              setOnlineRoomPeers([]);
-              setSelectedDeviceId(null);
-              pendingRoomJoinRef.current = null;
-              if (typeof window !== 'undefined' && window.location.hash.startsWith('#room=')) {
-                window.location.hash = '';
-                try {
-                  history.replaceState(null, '', window.location.pathname);
-                } catch {}
-              }
-              break;
-            }
-
-            case 'device-discovered': {
-              const dev = msg.payload.device;
-              if (dev.id !== myDeviceIdRef.current) {
-                setLocalDevices((prev) => {
-                  const filtered = prev.filter((d) => d.id !== dev.id);
-                  return [...filtered, dev];
-                });
-                if (modeRef.current === 'local') {
-                  setSelectedDeviceId((curr) => curr || dev.id);
-                }
-              }
-              break;
-            }
-
-            case 'device-departed': {
-              const { deviceId } = msg.payload;
-              setLocalDevices((prev) => prev.filter((d) => d.id !== deviceId));
-              if (modeRef.current === 'local') {
-                setSelectedDeviceId((curr) => (curr === deviceId ? null : curr));
-              }
-              break;
-            }
-
-            case 'room-created': {
-              const code = msg.payload.roomCode;
-              setRoomCode(code);
-              roomCodeRef.current = code;
-              setRoomError(null);
-              setOnlineRoomPeers([]);
-              setSelectedDeviceId(null);
-              window.location.hash = `#room=${code}`;
-              pendingRoomJoinRef.current = null;
-              sound.playPop();
-              break;
-            }
-
-            case 'room-joined': {
-              const code = msg.payload.roomCode;
-              setRoomCode(code);
-              roomCodeRef.current = code;
-              setRoomError(null);
-              window.location.hash = `#room=${code}`;
-              pendingRoomJoinRef.current = null;
-              sound.playPop();
-              break;
-            }
-
-            case 'room-peers': {
-              const { peers } = msg.payload;
-              if (Array.isArray(peers)) {
-                setOnlineRoomPeers(peers);
-                if (peers.length > 0) {
-                  setSelectedDeviceId((curr) => {
-                    if (!curr || !peers.some((p: Device) => p.id === curr)) {
-                      return peers[0].id;
-                    }
-                    return curr;
-                  });
-                  sound.playFanfare();
-                }
-              }
-              break;
-            }
-
-            case 'peer-joined-room': {
-              const { peer } = msg.payload;
-              if (peer && peer.id !== myDeviceIdRef.current) {
-                setOnlineRoomPeers((prev) => {
-                  const filtered = prev.filter((p) => p.id !== peer.id);
-                  return [...filtered, peer];
-                });
-                // Auto-select the newly joined peer
-                setSelectedDeviceId(peer.id);
-                sound.playFanfare();
-              }
-              break;
-            }
-
-            case 'peer-left-room': {
-              const { peerId } = msg.payload;
-              setOnlineRoomPeers((prev) => prev.filter((p) => p.id !== peerId));
-              setSelectedDeviceId((curr) => (curr === peerId ? null : curr));
-              break;
-            }
-
-            case 'clipboard-received': {
-              const { fromDevice, content, timestamp } = msg.payload;
-              setClipboardHistory((prev) => [
-                {
-                  id: Math.random().toString(),
-                  fromDevice,
-                  content,
-                  timestamp,
-                },
-                ...prev,
-              ]);
-              setClipboardToast({ fromDevice, content });
-              sound.playFanfare();
-              break;
-            }
-
-            case 'transfer-request': {
-              const { fromPeer, fileMeta, transferId } = msg.payload;
-              if (autoAcceptRef.current) {
-                handleAcceptTransfer(fromPeer, fileMeta, transferId);
-              } else {
-                sound.playFanfare();
-                setIncomingPrompt({ fromPeer, fileMeta, transferId });
-              }
-              break;
-            }
-
-            case 'transfer-response': {
-              const { transferId, accepted } = msg.payload;
-              if (!accepted) {
-                setTransfers((prev) =>
-                  prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
-                );
-                pendingOutgoingFilesRef.current.delete(transferId);
-                break;
-              }
-              const pending = pendingOutgoingFilesRef.current.get(transferId);
-              if (pending) {
-                startStreamingFile(pending.file, pending.targetPeerId, transferId);
-              }
-              break;
-            }
-
-            case 'file-chunk': {
-              const { transferId, chunkIndex, totalChunks, data } = msg.payload;
-              const buffer = receivingBuffersRef.current.get(transferId);
-              if (buffer) {
-                if (!buffer.chunks[chunkIndex]) {
-                  // Decode Base64 chunk to Uint8Array directly to conserve mobile RAM
-                  const binaryStr = atob(data);
-                  const len = binaryStr.length;
-                  const bytes = new Uint8Array(len);
-                  for (let j = 0; j < len; j++) {
-                    bytes[j] = binaryStr.charCodeAt(j);
-                  }
-                  buffer.chunks[chunkIndex] = bytes;
-                  buffer.receivedCount++;
-                }
-
-                const progress = Math.min(99, Math.round((buffer.receivedCount / totalChunks) * 100));
-                const elapsed = (Date.now() - buffer.startTime) / 1000;
-                const bytesSoFar = Math.min(
-                  buffer.meta.size,
-                  (buffer.receivedCount / totalChunks) * buffer.meta.size
-                );
-                const speed = elapsed > 0 ? bytesSoFar / elapsed : 0;
-                const remaining = buffer.meta.size - bytesSoFar;
-                const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
-
-                setTransfers((prev) =>
-                  prev.map((t) =>
-                    t.id === transferId
-                      ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
-                      : t
-                  )
-                );
-              }
-              break;
-            }
-
-            case 'transfer-complete': {
-              const { transferId } = msg.payload;
-              const buffer = receivingBuffersRef.current.get(transferId);
-              if (buffer) {
-                try {
-                  // Assembled directly from pre-decoded typed Uint8Array chunks
-                  const validChunks = buffer.chunks.filter((c): c is Uint8Array => Boolean(c));
-                  const fileBlob = new Blob(validChunks as unknown as BlobPart[], {
-                    type: buffer.meta.type || 'application/octet-stream',
-                  });
-                  const blobUrl = URL.createObjectURL(fileBlob);
-
-                  // Trigger automatic file download
-                  const a = document.createElement('a');
-                  a.href = blobUrl;
-                  a.download = buffer.meta.name;
-                  document.body.appendChild(a);
-                  a.click();
-                  setTimeout(() => {
-                    if (document.body.contains(a)) document.body.removeChild(a);
-                  }, 1000);
-
-                  setTransfers((prev) =>
-                    prev.map((t) =>
-                      t.id === transferId
-                        ? {
-                            ...t,
-                            progress: 100,
-                            status: 'completed',
-                            speedBytesPerSec: 0,
-                            etaSeconds: 0,
-                            blobUrl,
-                          }
-                        : t
-                    )
-                  );
-
-                  sound.playFanfare();
-                  confetti({
-                    particleCount: 70,
-                    spread: 80,
-                    origin: { y: 0.85 },
-                    colors: ['#00F59B', '#FFC900', '#60A5FA', '#FF90E8'],
-                  });
-                } catch (err) {
-                  console.error('Error assembling received file:', err);
-                }
-                receivingBuffersRef.current.delete(transferId);
-              }
-              break;
-            }
-
-            case 'transfer-cancel': {
-              const { transferId } = msg.payload;
-              setTransfers((prev) =>
-                prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
-              );
-              receivingBuffersRef.current.delete(transferId);
-              break;
-            }
-          }
-        } catch (e) {
-          console.error('Error parsing ws event:', e);
-        }
-      };
-
-      ws.onclose = () => {
-        console.warn('[MOG-SHARE] WebSocket Closed. Scheduling reconnect...');
-        setWsStatus('disconnected');
-        wsRef.current = null;
-        const delay = Math.min(5000, 500 * Math.pow(1.5, reconnectAttemptsRef.current));
-        reconnectAttemptsRef.current++;
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket();
-        }, delay);
-      };
-
-      ws.onerror = () => {
-        setWsStatus('disconnected');
-        if (wsRef.current) wsRef.current.close();
-      };
-    } catch {
-      setWsStatus('disconnected');
-    }
-  }, []);
-
-  // Initialize WebSocket once on mount
-  useEffect(() => {
-    connectWebSocket();
-
-    // Ping interval to keep connection alive on cellular / Cloudflare tunnels
-    const pingInterval = setInterval(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 15000);
-
-    // Reconnect immediately when mobile browser tab resumes from file picker or background
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        if (
-          !wsRef.current ||
-          wsRef.current.readyState === WebSocket.CLOSED ||
-          wsRef.current.readyState === WebSocket.CLOSING
-        ) {
-          console.log('[MOG-SHARE] Tab resumed visible, reconnecting socket...');
-          connectWebSocket();
-        }
-      }
+      reader.readAsDataURL(slice);
     };
 
-    const handleOnline = () => {
-      console.log('[MOG-SHARE] Device back online, reconnecting socket...');
-      connectWebSocket();
+    sendNextChunk();
+  }, []);
+
+  const handleAcceptTransfer = useCallback((
+    fromPeer: Device,
+    fileMeta: { name: string; size: number; type: string },
+    transferId: string
+  ) => {
+    networkRef.current?.sendTransferResponse(fromPeer.id, transferId, true);
+
+    const CHUNK_SIZE = 64 * 1024;
+    const totalChunks = Math.max(1, Math.ceil(fileMeta.size / CHUNK_SIZE));
+    receivingBuffersRef.current.set(transferId, {
+      meta: fileMeta,
+      chunks: new Array(totalChunks),
+      totalChunks,
+      receivedCount: 0,
+      startTime: Date.now(),
+    });
+
+    const newTransfer: TransferFile = {
+      id: transferId,
+      name: fileMeta.name,
+      size: fileMeta.size,
+      type: fileMeta.type,
+      progress: 0,
+      speedBytesPerSec: 0,
+      etaSeconds: Math.max(1, Math.round(fileMeta.size / (30 * 1024 * 1024))),
+      status: 'transferring',
+      direction: 'receiving',
+      peerName: fromPeer.name,
+      createdAt: Date.now(),
+    };
+
+    setTransfers((prev) => [newTransfer, ...prev]);
+    setIncomingPrompt(null);
+  }, []);
+
+  // Unified Multi-Tier Network Initialization
+  useEffect(() => {
+    const net = new NetworkService(
+      myDeviceIdRef.current,
+      deviceNameRef.current,
+      platformRef.current,
+      {
+        onStatusChange: (status, netMode) => {
+          setWsStatus(status);
+          setNetworkMode(netMode);
+          if (net) {
+            setLanHash(net.getLanHash());
+            setPublicIp(net.getPublicIp());
+          }
+        },
+        onDeviceDiscovered: (dev) => {
+          if (dev.id !== myDeviceIdRef.current) {
+            setLocalDevices((prev) => {
+              const filtered = prev.filter((d) => d.id !== dev.id);
+              return [...filtered, dev];
+            });
+            if (modeRef.current === 'local') {
+              setSelectedDeviceId((curr) => curr || dev.id);
+            }
+          }
+        },
+        onDeviceDeparted: (devId) => {
+          setLocalDevices((prev) => prev.filter((d) => d.id !== devId));
+          if (modeRef.current === 'local') {
+            setSelectedDeviceId((curr) => (curr === devId ? null : curr));
+          }
+        },
+        onRoomCreated: (code) => {
+          setRoomCode(code);
+          roomCodeRef.current = code;
+          setRoomError(null);
+          setOnlineRoomPeers([]);
+          setSelectedDeviceId(null);
+          window.location.hash = `#room=${code}`;
+          pendingRoomJoinRef.current = null;
+          sound.playPop();
+        },
+        onRoomJoined: (code) => {
+          setRoomCode(code);
+          roomCodeRef.current = code;
+          setRoomError(null);
+          window.location.hash = `#room=${code}`;
+          pendingRoomJoinRef.current = null;
+          sound.playPop();
+        },
+        onRoomPeers: (peers) => {
+          if (Array.isArray(peers)) {
+            setOnlineRoomPeers(peers);
+            if (peers.length > 0) {
+              setSelectedDeviceId((curr) => {
+                if (!curr || !peers.some((p: Device) => p.id === curr)) {
+                  return peers[0].id;
+                }
+                return curr;
+              });
+              sound.playFanfare();
+            }
+          }
+        },
+        onPeerJoinedRoom: (peer) => {
+          if (peer && peer.id !== myDeviceIdRef.current) {
+            setOnlineRoomPeers((prev) => {
+              const filtered = prev.filter((p) => p.id !== peer.id);
+              return [...filtered, peer];
+            });
+            setSelectedDeviceId(peer.id);
+            sound.playFanfare();
+          }
+        },
+        onPeerLeftRoom: (peerId) => {
+          setOnlineRoomPeers((prev) => prev.filter((p) => p.id !== peerId));
+          setSelectedDeviceId((curr) => (curr === peerId ? null : curr));
+        },
+        onTransferRequest: (fromPeer, fileMeta, transferId) => {
+          if (autoAcceptRef.current) {
+            handleAcceptTransfer(fromPeer, fileMeta, transferId);
+          } else {
+            sound.playFanfare();
+            setIncomingPrompt({ fromPeer, fileMeta, transferId });
+          }
+        },
+        onTransferResponse: (transferId, accepted) => {
+          if (!accepted) {
+            setTransfers((prev) =>
+              prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
+            );
+            pendingOutgoingFilesRef.current.delete(transferId);
+            return;
+          }
+          const pending = pendingOutgoingFilesRef.current.get(transferId);
+          if (pending) {
+            startStreamingFile(pending.file, pending.targetPeerId, transferId);
+          }
+        },
+        onFileChunk: (transferId, chunkIndex, totalChunks, data) => {
+          const buffer = receivingBuffersRef.current.get(transferId);
+          if (buffer) {
+            if (!buffer.chunks[chunkIndex]) {
+              const binaryStr = atob(data);
+              const len = binaryStr.length;
+              const bytes = new Uint8Array(len);
+              for (let j = 0; j < len; j++) {
+                bytes[j] = binaryStr.charCodeAt(j);
+              }
+              buffer.chunks[chunkIndex] = bytes;
+              buffer.receivedCount++;
+            }
+
+            const progress = Math.min(99, Math.round((buffer.receivedCount / totalChunks) * 100));
+            const elapsed = (Date.now() - buffer.startTime) / 1000;
+            const bytesSoFar = Math.min(
+              buffer.meta.size,
+              (buffer.receivedCount / totalChunks) * buffer.meta.size
+            );
+            const speed = elapsed > 0 ? bytesSoFar / elapsed : 0;
+            const remaining = buffer.meta.size - bytesSoFar;
+            const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
+
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === transferId
+                  ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
+                  : t
+              )
+            );
+          }
+        },
+        onTransferComplete: (transferId) => {
+          const buffer = receivingBuffersRef.current.get(transferId);
+          if (buffer) {
+            try {
+              const validChunks = buffer.chunks.filter((c): c is Uint8Array => Boolean(c));
+              const fileBlob = new Blob(validChunks as unknown as BlobPart[], {
+                type: buffer.meta.type || 'application/octet-stream',
+              });
+              const blobUrl = URL.createObjectURL(fileBlob);
+
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = buffer.meta.name;
+              document.body.appendChild(a);
+              a.click();
+              setTimeout(() => {
+                if (document.body.contains(a)) document.body.removeChild(a);
+              }, 1000);
+
+              setTransfers((prev) =>
+                prev.map((t) =>
+                  t.id === transferId
+                    ? {
+                        ...t,
+                        progress: 100,
+                        status: 'completed',
+                        speedBytesPerSec: 0,
+                        etaSeconds: 0,
+                        blobUrl,
+                      }
+                    : t
+                )
+              );
+
+              sound.playFanfare();
+              confetti({
+                particleCount: 70,
+                spread: 80,
+                origin: { y: 0.85 },
+                colors: ['#00F59B', '#FFC900', '#60A5FA', '#FF90E8'],
+              });
+            } catch (err) {
+              console.error('Error assembling received file:', err);
+            }
+            receivingBuffersRef.current.delete(transferId);
+          }
+        },
+        onTransferCancel: (transferId) => {
+          setTransfers((prev) =>
+            prev.map((t) => (t.id === transferId ? { ...t, status: 'cancelled' } : t))
+          );
+          receivingBuffersRef.current.delete(transferId);
+        },
+        onClipboardReceived: (fromDevice, content, timestamp) => {
+          setClipboardHistory((prev) => [
+            {
+              id: Math.random().toString(),
+              fromDevice,
+              content,
+              timestamp,
+            },
+            ...prev,
+          ]);
+          setClipboardToast({ fromDevice, content });
+          sound.playFanfare();
+        },
+        onError: (errMsg) => {
+          console.warn('[MOG-SHARE Network Error]:', errMsg);
+          setRoomError(errMsg);
+        },
+      }
+    );
+
+    networkRef.current = net;
+
+    // Check URL hash for initial room auto-join
+    const initialCode = pendingRoomJoinRef.current || roomCodeRef.current;
+    if (initialCode) {
+      setTimeout(() => {
+        net.joinRoom(initialCode);
+      }, 500);
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        net.broadcastPresence();
+      }
     };
 
     const handleHashChange = () => {
@@ -512,24 +489,20 @@ export function App() {
         const code = hash.replace('#room=', '').trim();
         if (code && code !== roomCodeRef.current) {
           setMode('online');
-          handleJoinRoom(code);
+          net.joinRoom(code);
         }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('online', handleOnline);
     window.addEventListener('hashchange', handleHashChange);
 
     return () => {
-      clearInterval(pingInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('online', handleOnline);
       window.removeEventListener('hashchange', handleHashChange);
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (wsRef.current) wsRef.current.close();
+      net.destroy();
     };
-  }, [connectWebSocket]);
+  }, [handleAcceptTransfer, startStreamingFile]);
 
   // Mode change handler with target auto-selection
   const handleModeChange = (newMode: ShareMode) => {
@@ -547,36 +520,19 @@ export function App() {
 
   const handleCreateRoom = () => {
     setRoomError(null);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'create-room' }));
-    } else {
-      connectWebSocket();
-    }
+    networkRef.current?.createRoom();
   };
 
   const handleJoinRoom = (code: string) => {
     setRoomError(null);
     const cleanCode = code.trim();
     if (!cleanCode) return;
-
     pendingRoomJoinRef.current = cleanCode;
-    // Don't set roomCode optimistically — wait for server 'room-joined' confirmation
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'join-room',
-          payload: { roomCode: cleanCode },
-        })
-      );
-    } else {
-      connectWebSocket();
-    }
+    networkRef.current?.joinRoom(cleanCode);
   };
 
   const handleLeaveRoom = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'leave-room' }));
-    }
+    networkRef.current?.leaveRoom();
     setRoomCode(null);
     roomCodeRef.current = null;
     setOnlineRoomPeers([]);
@@ -592,14 +548,7 @@ export function App() {
   };
 
   const handleBroadcastClipboard = (content: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'clipboard-broadcast',
-          payload: { content },
-        })
-      );
-    }
+    networkRef.current?.broadcastClipboard(content);
     setClipboardHistory((prev) => [
       {
         id: Math.random().toString(),
@@ -614,35 +563,13 @@ export function App() {
   const handleSaveDeviceName = (name: string) => {
     setDeviceName(name);
     localStorage.setItem('mog_device_name', name);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'register',
-          payload: {
-            id: myDeviceIdRef.current,
-            name,
-            platform,
-          },
-        })
-      );
-    }
+    networkRef.current?.updateProfile(name, platform);
   };
 
   const handleSavePlatform = (p: Platform) => {
     setPlatform(p);
     localStorage.setItem('mog_platform', p);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'register',
-          payload: {
-            id: myDeviceIdRef.current,
-            name: deviceName,
-            platform: p,
-          },
-        })
-      );
-    }
+    networkRef.current?.updateProfile(deviceName, p);
   };
 
   const handleToggleAutoAccept = () => {
@@ -681,185 +608,18 @@ export function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'transfer-request',
-            payload: {
-              targetPeerId: target.id,
-              transferId,
-              fileMeta: {
-                name: file.name,
-                size: file.size,
-                type: file.type || 'application/octet-stream',
-              },
-            },
-          })
-        );
-      }
+      networkRef.current?.sendTransferRequest(target.id, transferId, {
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+      });
     });
 
     setStagedFiles([]);
   };
 
-  // Stream File in Real Binary Chunks with Backpressure Control
-  const startStreamingFile = (file: File, targetPeerId: string, transferId: string) => {
-    const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk
-    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    let chunkIndex = 0;
-    const startTime = Date.now();
-    const token = { cancelled: false };
-    activeSendersRef.current.set(transferId, token);
-
-    const sendNextChunk = () => {
-      if (token.cancelled) return;
-
-      // Mobile backpressure guard: pause reading if WebSocket buffer exceeds 128KB
-      if (wsRef.current && wsRef.current.bufferedAmount > 128 * 1024) {
-        setTimeout(sendNextChunk, 20);
-        return;
-      }
-
-      if (chunkIndex >= totalChunks) {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'transfer-complete',
-              payload: {
-                targetPeerId,
-                transferId,
-              },
-            })
-          );
-        }
-
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transferId
-              ? { ...t, progress: 100, status: 'completed', speedBytesPerSec: 0, etaSeconds: 0 }
-              : t
-          )
-        );
-        sound.playFanfare();
-        confetti({
-          particleCount: 60,
-          spread: 70,
-          origin: { y: 0.85 },
-          colors: ['#ff90e8', '#ffc900', '#00f59b', '#90b8f8'],
-        });
-        activeSendersRef.current.delete(transferId);
-        pendingOutgoingFilesRef.current.delete(transferId);
-        return;
-      }
-
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(file.size, start + CHUNK_SIZE);
-      const slice = file.slice(start, end);
-      const reader = new FileReader();
-
-      reader.onload = () => {
-        if (token.cancelled) return;
-        const resultStr = reader.result as string;
-        const base64Data = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
-
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'file-chunk',
-              payload: {
-                targetPeerId,
-                transferId,
-                chunkIndex,
-                totalChunks,
-                data: base64Data,
-              },
-            })
-          );
-        }
-
-        chunkIndex++;
-        const progress = Math.min(99, Math.round((chunkIndex / totalChunks) * 100));
-        const elapsed = (Date.now() - startTime) / 1000;
-        const speed = elapsed > 0 ? end / elapsed : 0;
-        const remaining = file.size - end;
-        const eta = speed > 0 ? Math.max(1, Math.round(remaining / speed)) : 1;
-
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transferId
-              ? { ...t, progress, speedBytesPerSec: speed, etaSeconds: eta }
-              : t
-          )
-        );
-
-        setTimeout(sendNextChunk, 2);
-      };
-
-      reader.readAsDataURL(slice);
-    };
-
-    sendNextChunk();
-  };
-
-  const handleAcceptTransfer = (
-    fromPeer: Device,
-    fileMeta: { name: string; size: number; type: string },
-    transferId: string
-  ) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'transfer-response',
-          payload: {
-            targetPeerId: fromPeer.id,
-            transferId,
-            accepted: true,
-          },
-        })
-      );
-    }
-
-    const CHUNK_SIZE = 64 * 1024;
-    const totalChunks = Math.max(1, Math.ceil(fileMeta.size / CHUNK_SIZE));
-    receivingBuffersRef.current.set(transferId, {
-      meta: fileMeta,
-      chunks: new Array(totalChunks),
-      totalChunks,
-      receivedCount: 0,
-      startTime: Date.now(),
-    });
-
-    const newTransfer: TransferFile = {
-      id: transferId,
-      name: fileMeta.name,
-      size: fileMeta.size,
-      type: fileMeta.type,
-      progress: 0,
-      speedBytesPerSec: 0,
-      etaSeconds: Math.max(1, Math.round(fileMeta.size / (30 * 1024 * 1024))),
-      status: 'transferring',
-      direction: 'receiving',
-      peerName: fromPeer.name,
-      createdAt: Date.now(),
-    };
-
-    setTransfers((prev) => [newTransfer, ...prev]);
-    setIncomingPrompt(null);
-  };
-
   const handleDeclineTransfer = (fromPeer: Device, transferId: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'transfer-response',
-          payload: {
-            targetPeerId: fromPeer.id,
-            transferId,
-            accepted: false,
-          },
-        })
-      );
-    }
+    networkRef.current?.sendTransferResponse(fromPeer.id, transferId, false);
     setIncomingPrompt(null);
   };
 
@@ -868,6 +628,11 @@ export function App() {
     if (senderToken) {
       senderToken.cancelled = true;
       activeSendersRef.current.delete(id);
+    }
+    const pending = pendingOutgoingFilesRef.current.get(id);
+    if (pending) {
+      networkRef.current?.sendTransferCancel(pending.targetPeerId, id);
+      pendingOutgoingFilesRef.current.delete(id);
     }
     receivingBuffersRef.current.delete(id);
     setTransfers((prev) =>
@@ -927,6 +692,7 @@ export function App() {
           activeTab={activeTab}
           onTabChange={setActiveTab}
           wsStatus={wsStatus}
+          networkMode={networkMode}
         />
 
         {activeTab === 'transfer' ? (
@@ -1050,6 +816,10 @@ export function App() {
         onSavePlatform={handleSavePlatform}
         autoAccept={autoAccept}
         onToggleAutoAccept={handleToggleAutoAccept}
+        wsStatus={wsStatus}
+        networkMode={networkMode}
+        lanHash={lanHash}
+        publicIp={publicIp}
       />
 
       <footer className="w-full text-center py-5 text-xs font-mono font-bold text-slate-500 relative z-10">

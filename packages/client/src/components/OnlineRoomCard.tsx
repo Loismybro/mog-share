@@ -47,21 +47,25 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
   const [showQrModal, setShowQrModal] = useState(false);
 
   useEffect(() => {
-    if (roomCode) {
-      const origin = window.location.origin;
-      const pathname = window.location.pathname.replace(/\/+$/, '');
-      const shareUrl = `${origin}${pathname}/#room=${roomCode}`;
-      QRCode.toDataURL(shareUrl, {
-        width: 260,
-        margin: 1.5,
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
-      }).then(setQrDataUrl).catch(console.error);
-    } else {
-      setQrDataUrl(null);
-    }
+    if (!roomCode) return;
+    let active = true;
+    const origin = window.location.origin;
+    const pathname = window.location.pathname.replace(/\/+$/, '');
+    const shareUrl = `${origin}${pathname}/#room=${roomCode}`;
+    QRCode.toDataURL(shareUrl, {
+      width: 260,
+      margin: 1.5,
+      color: {
+        dark: '#000000',
+        light: '#ffffff',
+      },
+    }).then((url) => {
+      if (active) setQrDataUrl(url);
+    }).catch(console.error);
+
+    return () => {
+      active = false;
+    };
   }, [roomCode]);
 
   const handleCopy = () => {

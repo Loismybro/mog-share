@@ -107,11 +107,11 @@ Deploy MOG-SHARE in seconds across top cloud providers:
 
 | Platform | Role | 1-Click Deploy Button | Notes |
 | :--- | :--- | :---: | :--- |
-| **Vercel** | Web Client (Frontend) | [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLoismybro%2Fmog-share) | Pre-configured `vercel.json` with zero-config builds & SPA routing. Optional env: `VITE_WS_URL`. |
-| **Render** | Signaling Relay Server | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Loismybro/mog-share) | Uses `render.yaml` to host persistent WebSockets for online rooms & LAN proxy. |
-| **GitHub Pages** | Permanent Web Client | [Live GitHub Pages](https://loismybro.github.io/mog-share/) | Automatically deploys on every push to `main` via GitHub Actions. |
+| **Vercel** | Web Client (Frontend) | [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLoismybro%2Fmog-share) | Pre-configured `vercel.json` with zero-config builds & SPA routing. Out-of-the-box Auto Mesh. |
+| **Render** | Dedicated Private Relay (Optional) | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Loismybro/mog-share) | Uses `render.yaml` to host persistent WebSockets if you prefer a self-hosted private relay. |
+| **GitHub Pages** | Permanent Web Client | [Live GitHub Pages](https://loismybro.github.io/mog-share/) | Automatically deploys on every push to `main` via GitHub Actions. **100% Zero-Config & Fully Functional** using the built-in Cloud Mesh & Local Tab Mesh! |
 
-> 💡 **Tip for Vercel Deployments**: The web client deploys automatically with `vercel.json`. If you want to connect cross-network rooms across the internet without running a local server, deploy the backend server on Render (free) and set the `VITE_WS_URL` environment variable on Vercel to `wss://your-render-service.onrender.com/ws` (or configure it in the in-app Settings anytime).
+> 💡 **Zero-Config Cloud Mesh**: When hosted statically on GitHub Pages or Vercel, MOG-SHARE automatically activates the multi-tier Cloud Mesh Relay and local `BroadcastChannel` engine. Local Wi-Fi devices, cross-network 6-digit rooms, QR codes, and multi-tab tests connect immediately with **zero backend server deployment required**! You can also connect to your own private WebSocket server anytime in Settings.
 
 ---
 
