@@ -34,12 +34,10 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: |
-          npm install
-          npm install --prefix packages/client
+        run: npm install
 
       - name: Build Web Client
-        run: npm run build --prefix packages/client
+        run: npm run build
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
@@ -47,7 +45,7 @@ jobs:
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './packages/client/dist'
+          path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment

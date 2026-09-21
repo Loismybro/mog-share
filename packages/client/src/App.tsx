@@ -952,6 +952,7 @@ export function App() {
                 onSelectDevice={(peer) => setSelectedDeviceId(peer.id)}
                 errorMessage={roomError}
                 onClearError={() => setRoomError(null)}
+                onOpenSettings={() => setIsSettingsOpen(true)}
               />
             )}
 

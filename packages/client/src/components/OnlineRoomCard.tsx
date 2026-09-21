@@ -26,6 +26,7 @@ interface OnlineRoomCardProps {
   onSelectDevice?: (peer: Device) => void;
   errorMessage?: string | null;
   onClearError?: () => void;
+  onOpenSettings?: () => void;
 }
 
 export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
@@ -38,6 +39,7 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
   onSelectDevice,
   errorMessage,
   onClearError,
+  onOpenSettings,
 }) => {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [copied, setCopied] = useState(false);
@@ -125,15 +127,29 @@ export const OnlineRoomCard: React.FC<OnlineRoomCardProps> = ({
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 stroke-[2.5]" />
               <span className="font-bold font-mono">{errorMessage}</span>
             </div>
-            {onClearError && (
-              <button
-                type="button"
-                onClick={onClearError}
-                className="text-rose-300 hover:text-white font-black text-sm px-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.playPop();
+                    onOpenSettings();
+                  }}
+                  className="neo-btn neo-btn-yellow text-[10px] py-1 px-2.5 font-black uppercase text-black"
+                >
+                  Configure Relay
+                </button>
+              )}
+              {onClearError && (
+                <button
+                  type="button"
+                  onClick={onClearError}
+                  className="text-rose-300 hover:text-white font-black text-sm px-1 cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           </div>
         )}
 

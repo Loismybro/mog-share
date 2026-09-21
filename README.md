@@ -101,6 +101,20 @@ One click. Any OS. Zero installs for friends.
 
 ---
 
+## 🚀 1-Click Cloud Deployment
+
+Deploy MOG-SHARE in seconds across top cloud providers:
+
+| Platform | Role | 1-Click Deploy Button | Notes |
+| :--- | :--- | :---: | :--- |
+| **Vercel** | Web Client (Frontend) | [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLoismybro%2Fmog-share) | Pre-configured `vercel.json` with zero-config builds & SPA routing. Optional env: `VITE_WS_URL`. |
+| **Render** | Signaling Relay Server | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Loismybro/mog-share) | Uses `render.yaml` to host persistent WebSockets for online rooms & LAN proxy. |
+| **GitHub Pages** | Permanent Web Client | [Live GitHub Pages](https://loismybro.github.io/mog-share/) | Automatically deploys on every push to `main` via GitHub Actions. |
+
+> 💡 **Tip for Vercel Deployments**: The web client deploys automatically with `vercel.json`. If you want to connect cross-network rooms across the internet without running a local server, deploy the backend server on Render (free) and set the `VITE_WS_URL` environment variable on Vercel to `wss://your-render-service.onrender.com/ws` (or configure it in the in-app Settings anytime).
+
+---
+
 ## ⚡ Quickstart (Run in 30 Seconds)
 
 ### 1. Clone & Run
@@ -109,10 +123,8 @@ One click. Any OS. Zero installs for friends.
 git clone https://github.com/Loismybro/mog-share.git
 cd mog-share
 
-# Install dependencies
+# Install all workspace dependencies in one command
 npm install
-npm install --prefix packages/server
-npm install --prefix packages/client
 
 # Fire up both Server & Client concurrently
 npm run dev

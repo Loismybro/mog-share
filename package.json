@@ -2,11 +2,16 @@
   "name": "mog-share",
   "version": "1.0.0",
   "main": "index.js",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently -n \"server,client\" -c \"magenta,yellow\" \"npm run dev --prefix packages/server\" \"npm run dev --prefix packages/client\"",
     "dev:client": "npm run dev --prefix packages/client",
     "dev:server": "npm run dev --prefix packages/server",
-    "build": "npm run build --prefix packages/client",
+    "build": "npm run build --prefix packages/client && node -e \"const fs=require('fs'); fs.cpSync('packages/client/dist', 'dist', {recursive: true});\"",
+    "build:client": "npm run build --prefix packages/client",
+    "vercel-build": "npm run build",
     "start": "npm start --prefix packages/server",
     "test": "echo \"MogShare tests passed\" && exit 0"
   },
