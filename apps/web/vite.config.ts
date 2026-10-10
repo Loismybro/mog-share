@@ -1,14 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import path from 'path';
+import { fileURLToPath } from 'node:url';
 
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
   resolve: {
     alias: {
-      '@shareapp/shared': path.resolve(__dirname, '../../packages/shared/src/index.ts'),
+      '@shareapp/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
     },
   },
   plugins: [

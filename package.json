@@ -10,12 +10,9 @@
     "dev": "concurrently -n \"signaling,web\" -c \"magenta,yellow\" \"npm run dev:signaling\" \"npm run dev:web\"",
     "dev:signaling": "npx tsx apps/signaling/src/index.ts",
     "dev:web": "npx vite apps/web",
-    "dev:client": "npm run dev --prefix packages/client",
-    "dev:server": "npm run dev --prefix packages/server",
-    "build": "npx vite build --config apps/web/vite.config.ts apps/web && node -e \"const fs=require('fs'); fs.cpSync('apps/web/dist', 'dist', {recursive: true});\"",
+    "build": "npx vite build --config apps/web/vite.config.ts apps/web && node -e \"const fs=require('fs'); fs.cpSync('apps/web/dist', 'dist', {recursive: true}); fs.copyFileSync('apps/web/dist/index.html', 'dist/404.html');\"",
     "build:web": "npx vite build --config apps/web/vite.config.ts apps/web",
     "build:signaling": "npx tsc --project apps/signaling/tsconfig.json",
-    "build:client": "npm run build --prefix packages/client",
     "vercel-build": "npm run build",
     "start": "npx tsx apps/signaling/src/index.ts",
     "test": "npx vitest run"
@@ -27,7 +24,7 @@
   "devDependencies": {
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "^5.4.21",
+    "vite": "^8.3.0",
     "vitest": "2.1.9"
   }
 }

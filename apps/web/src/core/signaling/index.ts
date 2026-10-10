@@ -240,7 +240,6 @@ export class SignalingLadderClient {
 
       if (envelope.type === 'pong') {
         this.heartbeatMisses = 0;
-        return;
       }
 
       this.callbacks.onMessage(envelope);

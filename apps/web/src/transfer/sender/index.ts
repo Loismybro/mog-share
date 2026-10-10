@@ -5,6 +5,7 @@ import {
   DEFAULT_CREDIT_WINDOW_BLOCKS,
   MAX_CREDIT_WINDOW_BLOCKS,
 } from '@shareapp/shared';
+import { sha256Hex } from '../../utils/sha256.js';
 import {
   BinaryFrameType,
   encodeBinaryFrame,
@@ -202,10 +203,7 @@ export class FileSenderPipeline {
     const blockBuffer = await slice.arrayBuffer();
 
     // Compute block hash for BLOCK_END integrity manifest (Section 4.5 & 4.7)
-    const digest = await crypto.subtle.digest('SHA-256', blockBuffer);
-    const blockHash = Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const blockHash = await sha256Hex(blockBuffer);
 
     const totalBlockBytes = blockBuffer.byteLength;
     const numChunks = Math.ceil(totalBlockBytes / this.chunkSize);

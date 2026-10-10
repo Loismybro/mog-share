@@ -5,11 +5,13 @@ import {
 import {
   BinaryFrameType,
   decodeBinaryFrame,
+  transferIdToNum,
   type BlockEndPayload,
   type BlockAckPayload,
   type CreditGrantPayload,
 } from '../protocol/index.js';
 import type { BlockWriter } from '../storage/index.js';
+import { sha256Hex } from '../../utils/sha256.js';
 
 export interface FileReceiverCallbacks {
   sendCtlMessage: (message: unknown) => void;
@@ -33,6 +35,9 @@ export class FileReceiverPipeline {
   private verifiedBlocks = new Set<number>();
   private blockRetryCounts = new Map<number, number>();
   private verifiedBytes = 0;
+  private transferIdNum = 0;
+  private verifying = new Set<number>();
+  private finalized = false;
 
   constructor(
     transferId: string,
@@ -43,6 +48,7 @@ export class FileReceiverPipeline {
     initialVerifiedBlocks?: number[]
   ) {
     this.transferId = transferId;
+    this.transferIdNum = transferIdToNum(transferId);
     this.totalBytes = totalBytes;
     this.writer = writer;
     this.callbacks = callbacks;
@@ -70,6 +76,7 @@ export class FileReceiverPipeline {
   public handleDataFrame(rawFrame: Uint8Array) {
     try {
       const { header, payload } = decodeBinaryFrame(rawFrame);
+      if (header.transferIdNum !== this.transferIdNum) return; // frame belongs to another transfer
       if (header.type === BinaryFrameType.DATA) {
         let chunksMap = this.blockChunks.get(header.blockIndex);
         if (!chunksMap) {
@@ -94,6 +101,18 @@ export class FileReceiverPipeline {
   }
 
   private async tryVerifyBlock(blockIndex: number) {
+    if (this.verifying.has(blockIndex) || this.verifiedBlocks.has(blockIndex) || this.finalized) return;
+    this.verifying.add(blockIndex);
+    try {
+      await this.tryVerifyBlockInner(blockIndex);
+    } catch (err: unknown) {
+      this.callbacks.onError(err as Error);
+    } finally {
+      this.verifying.delete(blockIndex);
+    }
+  }
+
+  private async tryVerifyBlockInner(blockIndex: number) {
     const endMeta = this.blockEndPayloads.get(blockIndex);
     const chunksMap = this.blockChunks.get(blockIndex);
     if (!endMeta || !chunksMap) return;
@@ -119,10 +138,7 @@ export class FileReceiverPipeline {
     }
 
     // Integrity Check (Section 4.7)
-    const digest = await crypto.subtle.digest('SHA-256', assembledBlock);
-    const hashHex = Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const hashHex = await sha256Hex(assembledBlock);
 
     if (hashHex !== endMeta.blockHash) {
       const retries = (this.blockRetryCounts.get(blockIndex) || 0) + 1;
@@ -181,7 +197,8 @@ export class FileReceiverPipeline {
     this.callbacks.onBlockVerified(blockIndex);
 
     // If all blocks are verified, finalize
-    if (this.verifiedBlocks.size >= this.totalBlocks) {
+    if (this.verifiedBlocks.size >= this.totalBlocks && !this.finalized) {
+      this.finalized = true;
       const output = await this.writer.finalize();
       this.callbacks.onFileComplete(output);
     }

@@ -1,10 +1,5 @@
-# Self-hosting: Mog Share server + coturn TURN relay for strict NATs.
-#
-#   TURN_USER=mog TURN_PASS=change-me docker compose up -d
-#
-# Then build the client with:
-#   VITE_TURN_URL=turn:YOUR_HOST:3478 VITE_TURN_USER=mog VITE_TURN_PASS=change-me
-
+# Self-hosting: Mog Share + coturn (REST-credential TURN, matches the server's credential issuer)
+#   COTURN_REALM=turn.yourdomain.com COTURN_SECRET=$(openssl rand -hex 24) docker compose up -d
 services:
   mogshare:
     build: .
@@ -13,19 +8,17 @@ services:
       - "4000:4000"
     environment:
       - PORT=4000
-      # - CORS_ORIGINS=https://your-client.example.com
-
+      - COTURN_REALM=${COTURN_REALM:-}
+      - COTURN_SECRET=${COTURN_SECRET:-}
+      # - APP_ORIGIN=https://your-domain.com
+      # - TRUST_PROXY_HOPS=1   # number of proxies in front of the app
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
     network_mode: host
     command: >
-      -n
-      --log-file=stdout
-      --lt-cred-mech
-      --fingerprint
-      --realm=mogshare
-      --listening-port=3478
-      --min-port=49160
-      --max-port=49200
-      --user=${TURN_USER:-mog}:${TURN_PASS:-change-me}
+      -n --log-file=stdout --fingerprint
+      --use-auth-secret --static-auth-secret=${COTURN_SECRET:-change-me}
+      --realm=${COTURN_REALM:-mogshare}
+      --listening-port=3478 --min-port=49160 --max-port=49200
+      --no-multicast-peers --no-cli

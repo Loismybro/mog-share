@@ -1,24 +1,14 @@
 /**
- * Transfer Integrity (Section 4.7)
- * - Computes per-block SHA-256 hash
- * - Computes root hash-of-hashes over ordered list of block hashes for whole-file integrity
+ * Transfer Integrity (Section 4.7), secure-context safe (JS SHA-256 fallback).
  */
+import { sha256Hex } from '../../utils/sha256.js';
 
 export async function computeBlockHash(buffer: ArrayBuffer | Uint8Array): Promise<string> {
-  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const digest = await crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return sha256Hex(buffer);
 }
 
 export async function computeRootHash(blockHashes: string[]): Promise<string> {
-  const concatenated = blockHashes.join(':');
-  const enc = new TextEncoder();
-  const digest = await crypto.subtle.digest('SHA-256', enc.encode(concatenated));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  return sha256Hex(new TextEncoder().encode(blockHashes.join(':')));
 }
 
 export async function verifyRootHash(

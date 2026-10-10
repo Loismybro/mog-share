@@ -24,7 +24,7 @@ import { Gateway } from './gateway/index.js';
 const PORT = parseInt(process.env.PORT || '4000', 10);
 const SERVER_SALT = process.env.SERVER_SALT || crypto.randomBytes(32).toString('hex');
 const COTURN_SECRET = process.env.COTURN_SECRET || 'shareapp_secret_coturn_auth_key';
-const COTURN_REALM = process.env.COTURN_REALM || 'turn.example.com';
+const COTURN_REALM = process.env.COTURN_REALM || '';
 const ALLOWED_ORIGIN = process.env.APP_ORIGIN || '*';
 
 const app: Express = express();
@@ -121,11 +121,23 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+  res.write(': connected\n\n');
 
   gateway.registerConnection({ deviceId, transport: 'sse', sseRes: res });
+  const keepAlive = setInterval(() => {
+    try { res.write(': hb\n\n'); } catch { /* closed */ }
+  }, 20_000);
   req.on('close', () => {
+    clearInterval(keepAlive);
+    if (gateway.getConnection(deviceId)?.sseRes !== res) return; // already replaced
     gateway.removeConnection(deviceId);
+    groupIndex.scheduleDisconnect(deviceId, (peersToNotify) => {
+      for (const peer of peersToNotify) {
+        gateway.sendToClient(peer.deviceId, createEnvelope('peer-left', { deviceId }));
+      }
+    });
   });
 });
 
@@ -133,7 +145,24 @@ app.get('/api/events', (req, res) => {
 app.post('/api/message', (req, res) => {
   try {
     const envelope = validateEnvelope(req.body);
-    handleSignalingMessage(envelope);
+    const fromId = envelope.from;
+    if (!fromId) throw new Error('Missing sender id');
+    if (envelope.type !== 'relay-frame' && !gateway.checkRateLimit(fromId)) {
+      res.status(429).json({ error: 'Rate limit exceeded' });
+      return;
+    }
+    if (!gateway.getConnection(fromId)) {
+      gateway.registerConnection({ deviceId: fromId, transport: 'poll', pollQueue: [] });
+    }
+    const { clientIp } = extractVerifiedClientIp(req);
+    const netKey = deriveNetworkKey(clientIp, SERVER_SALT);
+    // Replies go back through whichever downlink (SSE / long-poll) the device uses.
+    const shim = {
+      send: (raw: string) => {
+        try { gateway.sendToClient(fromId, JSON.parse(raw)); } catch { /* ignore */ }
+      },
+    } as unknown as WebSocket;
+    handleIncomingSocketMessage(shim, envelope, netKey);
     res.status(200).json({ ok: true });
   } catch (err: unknown) {
     res.status(400).json({ error: (err as Error).message });
@@ -147,21 +176,34 @@ app.get('/api/poll', (req, res) => {
     res.status(400).json({ error: 'Missing deviceId' });
     return;
   }
-  const since = parseInt((req.query.since as string) || '0', 10);
-  const missed = gateway.getMissedMessages(deviceId, since);
-  if (missed.length > 0) {
-    res.json({ messages: missed });
-    return;
+  const existing = gateway.getConnection(deviceId);
+  if (existing?.transport === 'poll') {
+    if (existing.pollTimer) clearTimeout(existing.pollTimer);
+    if (existing.pollRes && existing.pollRes !== res) existing.pollRes.json({ messages: [] });
+    const queued = existing.pollQueue || [];
+    if (queued.length > 0) {
+      existing.pollQueue = [];
+      existing.pollRes = undefined;
+      res.json({ messages: queued });
+      return;
+    }
   }
   const timer = setTimeout(() => {
-    gateway.removeConnection(deviceId);
-    res.json({ messages: [] });
+    const c = gateway.getConnection(deviceId);
+    if (c && c.pollRes === res) c.pollRes = undefined;
+    if (!res.headersSent) res.json({ messages: [] });
   }, 25000);
   gateway.registerConnection({
     deviceId,
     transport: 'poll',
     pollRes: res,
     pollTimer: timer,
+    pollQueue: [],
+  });
+  req.on('close', () => {
+    clearTimeout(timer);
+    const c = gateway.getConnection(deviceId);
+    if (c && c.pollRes === res) c.pollRes = undefined;
   });
 });
 
@@ -240,6 +282,8 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   ws.on('close', () => {
     metrics.activeSessions = Math.max(0, metrics.activeSessions - 1);
     if (boundDeviceId) {
+      const cur = gateway.getConnection(boundDeviceId);
+      if (cur && cur.ws !== ws) return; // device already reconnected on a newer socket
       const departingId = boundDeviceId;
       gateway.removeConnection(departingId);
       groupIndex.scheduleDisconnect(departingId, (peersToNotify) => {

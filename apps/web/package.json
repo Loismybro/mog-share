@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@shareapp/shared": "workspace:*",
+    "@shareapp/shared": "*",
     "fflate": "^0.8.2",
     "lucide-react": "^1.44.0",
     "qrcode": "^1.5.4",

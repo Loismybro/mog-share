@@ -94,6 +94,7 @@ export class PeerSession {
       ordered: true,
     });
     this.dataChannel.binaryType = 'arraybuffer';
+    this.dataChannel.bufferedAmountLowThreshold = 256 * 1024;
 
     this.setupDataChannelHandlers();
     this.setupPeerConnectionHandlers();
@@ -353,6 +354,8 @@ export class PeerSession {
           ? frame.buffer
           : frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
       this.dataChannel.send(buf as ArrayBuffer);
+    } else {
+      throw new Error('Data channel is not open');
     }
   }
 
@@ -361,15 +364,43 @@ export class PeerSession {
   }
 
   public waitForBufferedAmountLow(): Promise<void> {
-    if (!this.dataChannel || this.dataChannel.bufferedAmount <= (this.dataChannel.bufferedAmountLowThreshold || 256 * 1024)) {
+    const dc = this.dataChannel;
+    if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
-      const onLow = () => {
-        this.dataChannel.removeEventListener('bufferedamountlow', onLow);
+      const done = () => {
+        dc.removeEventListener('bufferedamountlow', done);
+        dc.removeEventListener('close', done);
+        dc.removeEventListener('error', done);
+        clearTimeout(guard);
         resolve();
       };
-      this.dataChannel.addEventListener('bufferedamountlow', onLow);
+      // guard: never hang forever if the channel dies mid-wait
+      const guard = setTimeout(done, 5000);
+      dc.addEventListener('bufferedamountlow', done);
+      dc.addEventListener('close', done);
+      dc.addEventListener('error', done);
+    });
+  }
+
+  /** Resolves true once the data channel is open, false on timeout / close. */
+  public whenDataOpen(timeoutMs = 20000): Promise<boolean> {
+    const dc = this.dataChannel;
+    if (dc.readyState === 'open') return Promise.resolve(true);
+    if (dc.readyState === 'closing' || dc.readyState === 'closed') return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const finish = (ok: boolean) => {
+        dc.removeEventListener('open', onOpen);
+        dc.removeEventListener('close', onClose);
+        clearTimeout(timer);
+        resolve(ok);
+      };
+      const onOpen = () => finish(true);
+      const onClose = () => finish(false);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      dc.addEventListener('open', onOpen);
+      dc.addEventListener('close', onClose);
     });
   }
 

@@ -16,9 +16,20 @@ export async function handleTurnCredentialsRequest(
   turnRealm: string
 ) {
   try {
+    const publicStun: IceServerConfig[] = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+    ];
+    // No TURN host configured: return public STUN only (never dead placeholder hosts).
+    if (!turnRealm) {
+      res.json({ iceServers: publicStun, ttl: 0, expiryUnix: 0, turn: false });
+      return;
+    }
     const creds = await generateTurnCredentials(turnSecret, TURN_CREDENTIAL_TTL_SEC);
 
     const iceServers: IceServerConfig[] = [
+      ...publicStun,
       { urls: `stun:${turnRealm}:${DEFAULT_TURN_PORT_UDP}` },
       {
         urls: [

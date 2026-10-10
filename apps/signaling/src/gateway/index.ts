@@ -64,6 +64,7 @@ export interface ClientConnection {
   sseRes?: Response;
   pollRes?: Response;
   pollTimer?: NodeJS.Timeout;
+  pollQueue?: SignalingEnvelope[];
 }
 
 export class Gateway {
@@ -120,10 +121,15 @@ export class Gateway {
       return true;
     }
 
-    if (conn.transport === 'poll' && conn.pollRes) {
-      if (conn.pollTimer) clearTimeout(conn.pollTimer);
-      conn.pollRes.json(envelope);
-      conn.pollRes = undefined;
+    if (conn.transport === 'poll') {
+      if (conn.pollRes) {
+        if (conn.pollTimer) clearTimeout(conn.pollTimer);
+        conn.pollRes.json({ messages: [envelope] });
+        conn.pollRes = undefined;
+      } else {
+        (conn.pollQueue ||= []).push(envelope);
+        if (conn.pollQueue.length > 200) conn.pollQueue.shift();
+      }
       return true;
     }
 

@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@shareapp/shared": "workspace:*",
+    "@shareapp/shared": "*",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "tsx": "^4.23.13",

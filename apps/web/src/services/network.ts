@@ -9,7 +9,6 @@ import type {
 import {
   DEFAULT_CHUNK_SIZE,
   DEFAULT_BLOCK_SIZE,
-  DEFAULT_CREDIT_WINDOW_BLOCKS,
   ROOM_CODE_LENGTH,
   ROOM_CODE_ALPHABET,
   type SignalingEnvelope,
@@ -113,6 +112,7 @@ export class NetworkService {
   private iceServers: IceServerConfig[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ];
 
   private visiblePeers = new Map<string, Device>();
@@ -132,6 +132,7 @@ export class NetworkService {
 
   private journal: TransferJournal;
   private destroyed = false;
+  private seenCtl = new Set<string>();
   private latencyMs: number | null = null;
   private lastPingSent = 0;
   private pendingRoomAction: (() => void) | null = null;
@@ -149,7 +150,8 @@ export class NetworkService {
     this.journal = new TransferJournal();
 
     const envUrl = (import.meta as any).env?.VITE_SERVER_URL as string | undefined;
-    this.serverUrl = serverUrlOverride || envUrl || window.location.origin;
+    const storedUrl = typeof localStorage !== "undefined" ? (localStorage.getItem("mog_server_url") || undefined) : undefined;
+    this.serverUrl = serverUrlOverride || storedUrl || envUrl || window.location.origin;
 
     void this.initialize();
   }
@@ -242,7 +244,8 @@ export class NetworkService {
       if (res.ok) {
         const data = await res.json();
         if (data.iceServers && Array.isArray(data.iceServers)) {
-          this.iceServers = data.iceServers;
+          const base = this.iceServers.filter((s) => !(s as { username?: string }).username);
+          this.iceServers = [...base, ...data.iceServers];
         }
       }
     } catch {
@@ -426,7 +429,7 @@ export class NetworkService {
     if (bundle) return bundle;
 
     const trustManager = new TrustManager();
-    void trustManager.init();
+    trustManager.init().catch(() => undefined); // needs a secure context; non-fatal
 
     const orchestrator = new ConnectionLadderOrchestrator({
       onStatusChange: (_status, _detail) => {
@@ -497,6 +500,13 @@ export class NetworkService {
   private handleCtlMessage(remoteDeviceId: string, data: any) {
     if (!data || typeof data !== 'object') return;
     const { type, payload } = data;
+
+    // ctl messages can arrive twice (data channel + signaling fallback): drop duplicates
+    if (type === 'request-transfer' || type === 'accept-transfer' || type === 'decline-transfer') {
+      const key = `${type}:${payload?.transferId}`;
+      if (this.seenCtl.has(key)) return;
+      this.seenCtl.add(key);
+    }
 
     switch (type) {
       case 'request-transfer': {
@@ -610,12 +620,16 @@ export class NetworkService {
     const transferId = `xfer_${Math.random().toString(36).slice(2, 10)}`;
     const bundle = this.getOrCreatePeerBundle(peer.id);
 
-    const sas = await bundle.trustManager.computeVerificationSAS(
-      '00:11:22:33',
-      '44:55:66:77',
-      'pubA',
-      'pubB'
-    );
+    let sas: { sasNumeric: string; sasEmoji: string; isTrusted: boolean } = {
+      sasNumeric: '',
+      sasEmoji: '',
+      isTrusted: false,
+    };
+    try {
+      sas = await bundle.trustManager.computeVerificationSAS('00:11:22:33', '44:55:66:77', 'pubA', 'pubB');
+    } catch {
+      /* SAS needs crypto.subtle (secure context); transfer still works without it */
+    }
 
     let blobUrl: string | undefined;
     try {
@@ -649,12 +663,17 @@ export class NetworkService {
       transferId,
       0,
       {
-        sendDataChannel: (frame) => {
-          if (bundle.peerSession.data.readyState === 'open') {
-            bundle.peerSession.sendData(frame);
-          } else {
-            void bundle.relayTransport.send(frame);
+        sendDataChannel: async (frame) => {
+          const ps = bundle.peerSession;
+          if (ps.data.readyState !== 'open') {
+            const ok = await ps.whenDataOpen(20000);
+            if (!ok) {
+              throw new Error(
+                'Could not open a direct connection to this device. Use the same Wi-Fi, or set up a TURN server (see FIX_NOTES.md).'
+              );
+            }
           }
+          ps.sendData(frame);
         },
         sendCtlMessage: (msg) => {
           bundle.peerSession.sendCtl(msg);
@@ -840,10 +859,6 @@ export class NetworkService {
     sendCtlSafe({
       type: 'accept-transfer',
       payload: { transferId },
-    });
-    sendCtlSafe({
-      type: 'credit-grant',
-      payload: { transferId, credits: DEFAULT_CREDIT_WINDOW_BLOCKS },
     });
   }
 

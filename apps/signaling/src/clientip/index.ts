@@ -103,9 +103,13 @@ export function extractVerifiedClientIp(
       // Rightmost entry of X-Forwarded-For
       const xff = req.headers['x-forwarded-for'];
       if (typeof xff === 'string' && xff.trim()) {
-        const parts = xff.split(',').map((s) => normalizeIp(s));
+        const parts = xff.split(',').map((s) => normalizeIp(s)).filter(Boolean);
         if (parts.length > 0) {
-          finalIp = parts[parts.length - 1];
+          // Walk from the right, skipping our own proxies, to find the real client.
+          const hops = parseInt(process.env.TRUST_PROXY_HOPS || '0', 10) || 0;
+          let idx = parts.length - 1 - hops;
+          while (idx > 0 && trustedCidrs.some((cidr) => isIpInCidr(parts[idx], cidr))) idx--;
+          finalIp = parts[Math.max(0, idx)];
           isProxied = true;
         }
       }

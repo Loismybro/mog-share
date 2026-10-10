@@ -1,14 +1,15 @@
 services:
   - type: web
-    name: mog-share-server
+    name: mog-share
     env: node
     plan: free
-    buildCommand: npm install --include=dev && npm install --include=dev --prefix packages/server && npm install --include=dev --prefix packages/client && npm run build --prefix packages/client
-    startCommand: npm start --prefix packages/server
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 22.14.0
-      - key: PORT
-        value: 10000
       - key: NODE_ENV
         value: production
+      # Optional TURN (strict NATs / mobile data). Leave unset to use public STUN only.
+      # - key: COTURN_REALM      # e.g. turn.yourdomain.com
+      # - key: COTURN_SECRET     # same value as coturn static-auth-secret
