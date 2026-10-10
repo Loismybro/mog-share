@@ -1,5 +1,8 @@
 import express from 'express';
 import http from 'http';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -25,8 +28,17 @@ const COTURN_REALM = process.env.COTURN_REALM || 'turn.example.com';
 const ALLOWED_ORIGIN = process.env.APP_ORIGIN || '*';
 
 const app = express();
+app.set('trust proxy', true);
 app.use(cors({ origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN }));
 app.use(express.json({ limit: `${MAX_SIGNALING_MESSAGE_SIZE}b` }));
+
+// Security headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_SIGNALING_MESSAGE_SIZE });
@@ -41,7 +53,45 @@ const gateway = new Gateway();
 // HTTP Endpoints
 // ---------------------------------------------------------------------------
 app.get('/healthz', handleHealthz);
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    devices: groupIndex.getDeviceCount(),
+    rooms: roomManager.getActiveRoomCount(),
+  });
+});
 app.get('/metrics', (req, res) => handleMetrics(req, res, metrics));
+
+// LAN info (R6)
+app.get('/api/info', (_req, res) => {
+  const addresses: string[] = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const addr of ifaces[name] || []) {
+      if (addr.family === 'IPv4' && !addr.internal) addresses.push(addr.address);
+    }
+  }
+  res.json({ lanAddresses: addresses, port: PORT });
+});
+
+// Download project ZIP archive
+app.get('/api/download-zip', (_req, res) => {
+  const zipCandidates = [
+    path.resolve('/teamspace/studios/this_studio/mog-share-final.zip'),
+    path.resolve(process.cwd(), 'mog-share-final.zip'),
+    path.resolve(process.cwd(), 'dist/mog-share-final.zip'),
+    path.resolve(process.cwd(), 'apps/web/dist/mog-share-final.zip'),
+  ];
+  for (const candidate of zipCandidates) {
+    if (fs.existsSync(candidate)) {
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename="mog-share-final.zip"');
+      return res.sendFile(candidate);
+    }
+  }
+  res.status(404).send('Archive not found');
+});
 
 // Probes (Section 3.1 & 3.3)
 app.get('/ip', handleSimpleIpRequest);
@@ -115,6 +165,28 @@ app.get('/api/poll', (req, res) => {
   });
 });
 
+// D5: WebSocket keep-alive (ping every 25s, terminate on missed pong)
+const aliveSockets = new WeakMap<WebSocket, boolean>();
+const pingInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (aliveSockets.get(ws) === false) {
+      ws.terminate();
+      continue;
+    }
+    aliveSockets.set(ws, false);
+    try {
+      ws.ping();
+    } catch {
+      /* socket dead */
+    }
+  }
+}, 25_000);
+
+// R5: Room lifecycle and expired room pruning
+const roomPruneInterval = setInterval(() => {
+  roomManager.pruneExpiredRooms();
+}, 60_000);
+
 // ---------------------------------------------------------------------------
 // WebSocket Gateway Handling
 // ---------------------------------------------------------------------------
@@ -126,6 +198,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       return;
     }
   }
+
+  aliveSockets.set(ws, true);
+  ws.on('pong', () => aliveSockets.set(ws, true));
 
   metrics.totalConnections++;
   metrics.activeSessions++;
@@ -169,6 +244,20 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       groupIndex.scheduleDisconnect(boundDeviceId, () => {
         broadcastGroupPresence(boundDeviceId!);
       });
+
+      // R5: Room departure & host handover
+      const userRooms = roomManager.getRoomsForDevice(boundDeviceId);
+      for (const room of userRooms) {
+        roomManager.leaveRoom(room.code, boundDeviceId);
+        for (const peerId of room.peerIds) {
+          if (peerId !== boundDeviceId) {
+            gateway.sendToClient(
+              peerId,
+              createEnvelope('peer-left-room', { peerId: boundDeviceId, roomCode: room.code })
+            );
+          }
+        }
+      }
     }
   });
 });
@@ -181,6 +270,7 @@ function handleIncomingSocketMessage(
   const { type, from, payload } = envelope;
 
   switch (type) {
+    case 'join':
     case 'join-local': {
       if (!from) return;
       groupIndex.cancelDisconnect(from);
@@ -211,6 +301,63 @@ function handleIncomingSocketMessage(
           })
         )
       );
+      break;
+    }
+
+    case 'update-profile': {
+      if (!from) return;
+      const sess = groupIndex.getSession(from);
+      if (sess) {
+        if (payload.name) sess.name = String(payload.name).slice(0, 40);
+        if (payload.platform) sess.platform = payload.platform as string;
+        broadcastGroupPresence(from);
+      }
+      break;
+    }
+
+    case 'broadcast-clipboard': {
+      if (!from) return;
+      const content = typeof payload.content === 'string' ? payload.content.slice(0, 100_000) : '';
+      if (!content) return;
+      const senderSession = groupIndex.getSession(from);
+      const out = {
+        fromDevice: senderSession?.name || from,
+        content,
+        timestamp: (payload.timestamp as number) || Date.now(),
+      };
+      // Scoped to same network group & active rooms
+      const peers = groupIndex.getVisiblePeers(from);
+      for (const peer of peers) {
+        gateway.sendToClient(peer.deviceId, createEnvelope('clipboard-received', out));
+      }
+      const userRooms = roomManager.getRoomsForDevice(from);
+      for (const room of userRooms) {
+        for (const peerId of room.peerIds) {
+          if (peerId !== from) {
+            gateway.sendToClient(peerId, createEnvelope('clipboard-received', out));
+          }
+        }
+      }
+      break;
+    }
+
+    case 'leave-room': {
+      if (!from) return;
+      const code = ((payload.roomCode as string) || '').toUpperCase();
+      const targetRooms = code ? [roomManager.getRoom(code)].filter(Boolean) : roomManager.getRoomsForDevice(from);
+      for (const room of targetRooms) {
+        if (!room) continue;
+        roomManager.leaveRoom(room.code, from);
+        for (const peerId of room.peerIds) {
+          if (peerId !== from) {
+            gateway.sendToClient(
+              peerId,
+              createEnvelope('peer-left-room', { peerId: from, roomCode: room.code })
+            );
+          }
+        }
+      }
+      ws.send(JSON.stringify(createEnvelope('room-left', { roomCode: code })));
       break;
     }
 
@@ -255,7 +402,7 @@ function handleIncomingSocketMessage(
 
     case 'join-room': {
       if (!from) return;
-      const code = (payload.roomCode as string) || '';
+      const code = ((payload.roomCode as string) || '').toUpperCase();
       const password = payload.password as string | undefined;
       const ipHash = crypto.createHash('sha256').update(connNetworkKey).digest('hex').slice(0, 12);
 
@@ -278,13 +425,31 @@ function handleIncomingSocketMessage(
         return;
       }
 
-      ws.send(JSON.stringify(createEnvelope('room-joined', { roomCode: code })));
-      // Broadcast to room members
+      const existingPeers = Array.from(joinResult.room!.peerIds)
+        .filter((peerId) => peerId !== from)
+        .map((peerId) => {
+          const sess = groupIndex.getSession(peerId);
+          return {
+            id: peerId,
+            name: sess?.name || `Device (${peerId.slice(0, 4)})`,
+            platform: sess?.platform || 'web',
+          };
+        });
+
+      ws.send(JSON.stringify(createEnvelope('room-joined', { roomCode: code, peers: existingPeers })));
+
+      // Broadcast to room members with the joining peer's info
+      const joinerSession = groupIndex.getSession(from);
       for (const peerId of joinResult.room!.peerIds) {
         if (peerId !== from) {
           gateway.sendToClient(
             peerId,
-            createEnvelope('peer-joined-room', { peerId: from, roomCode: code })
+            createEnvelope('peer-joined-room', {
+              peerId: from,
+              roomCode: code,
+              name: joinerSession?.name || `Device (${from.slice(0, 4)})`,
+              platform: joinerSession?.platform || 'web',
+            })
           );
         }
       }
@@ -364,6 +529,31 @@ function broadcastGroupPresence(deviceId: string) {
       );
     }
   }
+}
+
+// Serve built web client if available (single-origin deployment / Cloudflare tunnel / Render)
+const distCandidates = [
+  path.resolve(process.cwd(), 'apps/web/dist'),
+  path.resolve(process.cwd(), 'dist'),
+  path.resolve(process.cwd(), '../web/dist'),
+];
+const distPath = distCandidates.find((p) => fs.existsSync(p));
+if (distPath) {
+  app.use(express.static(distPath));
+  app.use((req, res, next) => {
+    if (
+      req.method !== 'GET' ||
+      req.path.startsWith('/api') ||
+      req.path.startsWith('/ws') ||
+      req.path.startsWith('/ip') ||
+      req.path.startsWith('/debug') ||
+      req.path.startsWith('/healthz') ||
+      req.path.startsWith('/metrics')
+    ) {
+      return next();
+    }
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 }
 
 export { server, app, groupIndex, roomManager, metrics, gateway };

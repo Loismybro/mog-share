@@ -311,12 +311,50 @@ export class NetworkService {
       case 'room-joined': {
         const code = payload.roomCode as string;
         this.currentRoomCode = code;
+        const peers = (payload.peers as Array<{ id: string; name?: string; platform?: Platform }>) || [];
+        for (const p of peers) {
+          if (p.id !== this.deviceId) {
+            this.roomPeers.set(p.id, {
+              id: p.id,
+              name: p.name || `Device (${p.id.slice(0, 4)})`,
+              platform: p.platform || 'web',
+              connType: 'Direct (internet)',
+            });
+          }
+        }
         this.callbacks.onRoomJoined(code);
+        if (this.roomPeers.size > 0) {
+          this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+        }
         break;
       }
 
       case 'room-join-failed': {
         this.callbacks.onRoomError((payload.error as string) || 'Failed to join room');
+        break;
+      }
+
+      case 'peer-left-room': {
+        const pId = payload.peerId as string;
+        if (pId) {
+          this.roomPeers.delete(pId);
+          this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+        }
+        break;
+      }
+
+      case 'room-left': {
+        this.currentRoomCode = null;
+        this.roomPeers.clear();
+        this.callbacks.onRoomLeft();
+        break;
+      }
+
+      case 'clipboard-received': {
+        const fromName = (payload.fromDevice as string) || 'Device';
+        const content = (payload.content as string) || '';
+        const ts = (payload.timestamp as number) || Date.now();
+        this.callbacks.onClipboardReceived(fromName, content, ts);
         break;
       }
 
@@ -811,6 +849,9 @@ export class NetworkService {
   }
 
   public leaveRoom() {
+    if (this.currentRoomCode) {
+      this.signaling?.send('leave-room', { roomCode: this.currentRoomCode });
+    }
     this.currentRoomCode = null;
     this.roomPeers.clear();
     this.callbacks.onRoomLeft();
@@ -860,6 +901,9 @@ export class NetworkService {
 
   public destroy() {
     this.destroyed = true;
+    if (this.currentRoomCode) {
+      this.signaling?.send('leave-room', { roomCode: this.currentRoomCode });
+    }
     if (this.signaling) {
       this.signaling.destroy();
       this.signaling = null;

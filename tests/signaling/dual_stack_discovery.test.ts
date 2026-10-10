@@ -110,4 +110,42 @@ describe('Phase 2 Signaling Server: Dual-Stack Local Group Discovery & Rooms', (
     expect(session).toBeDefined();
     expect(session?.deviceId).toBe('dev_resuming');
   });
+
+  it('tracks room active counts and memberships accurately', () => {
+    expect(roomManager.getActiveRoomCount()).toBe(0);
+    const room1 = roomManager.createRoom('dev_user_1');
+    const room2 = roomManager.createRoom('dev_user_2');
+    expect(roomManager.getActiveRoomCount()).toBe(2);
+
+    roomManager.joinRoom(room1.code, 'dev_user_2');
+    const user2Rooms = roomManager.getRoomsForDevice('dev_user_2');
+    expect(user2Rooms).toHaveLength(2);
+
+    roomManager.leaveRoom(room1.code, 'dev_user_1');
+    expect(roomManager.getActiveRoomCount()).toBe(2); // still has user 2
+
+    roomManager.leaveRoom(room1.code, 'dev_user_2');
+    expect(roomManager.getActiveRoomCount()).toBe(1); // empty room deleted
+
+    roomManager.leaveRoom(room2.code, 'dev_user_2');
+    expect(roomManager.getActiveRoomCount()).toBe(0);
+  });
+
+  it('exposes correct metrics and device counts', () => {
+    expect(groupIndex.getDeviceCount()).toBe(0);
+    const key = deriveNetworkKey('192.168.1.1', SERVER_SALT);
+    groupIndex.registerDevice({
+      deviceId: 'dev_1',
+      name: 'Tester',
+      platform: 'web',
+      networkKeys: new Set([key]),
+      connectedAt: Date.now(),
+      lastSeen: Date.now(),
+      heartbeatComplete: true,
+      resumeToken: 'tok1',
+    });
+    expect(groupIndex.getDeviceCount()).toBe(1);
+    groupIndex.removeDevice('dev_1');
+    expect(groupIndex.getDeviceCount()).toBe(0);
+  });
 });

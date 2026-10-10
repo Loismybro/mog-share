@@ -125,6 +125,20 @@ export class RoomManager {
     }
   }
 
+  public getActiveRoomCount(): number {
+    return this.rooms.size;
+  }
+
+  public getRoomsForDevice(deviceId: string): Room[] {
+    const list: Room[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.peerIds.has(deviceId)) {
+        list.push(room);
+      }
+    }
+    return list;
+  }
+
   public arePeersInSameRoom(peerA: string, peerB: string): boolean {
     for (const room of this.rooms.values()) {
       if (room.peerIds.has(peerA) && room.peerIds.has(peerB)) {

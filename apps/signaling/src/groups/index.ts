@@ -45,6 +45,10 @@ export class LocalGroupIndex {
     return this.devices.get(deviceId);
   }
 
+  public getDeviceCount(): number {
+    return this.devices.size;
+  }
+
   public getSessionByToken(resumeToken: string): DeviceSession | undefined {
     const id = this.tokenToDeviceId.get(resumeToken);
     return id ? this.devices.get(id) : undefined;
