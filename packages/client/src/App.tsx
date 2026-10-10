@@ -821,7 +821,12 @@ export function App() {
   // Direct ZIP download of the complete app (User Request)
   const handleDownloadZip = () => {
     sound.playPop();
-    window.location.href = '/api/download-zip';
+    const link = document.createElement('a');
+    link.href = './mog-share-final.zip';
+    link.download = 'mog-share-final.zip';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
     showToast('Downloading complete app .zip...', 'info');
   };
 
