@@ -5,7 +5,7 @@ const SHARED_CACHE = 'mog-shared-files';
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(['/']).catch(() => undefined))
+    caches.open(SHELL_CACHE).then((cache) => cache.addAll(['./']).catch(() => undefined))
   );
 });
 
@@ -65,10 +65,10 @@ self.addEventListener('fetch', (event) => {
       fetch(event.request)
         .then((res) => {
           const copy = res.clone();
-          caches.open(SHELL_CACHE).then((c) => c.put('/', copy)).catch(() => undefined);
+          caches.open(SHELL_CACHE).then((c) => c.put(event.request, copy)).catch(() => undefined);
           return res;
         })
-        .catch(() => caches.match('/').then((r) => r || Response.error()))
+        .catch(() => caches.match(event.request).then((r) => r || caches.match('./').then((f) => f || Response.error())))
     );
     return;
   }

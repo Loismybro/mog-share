@@ -10,6 +10,10 @@ services:
         value: 22.14.0
       - key: NODE_ENV
         value: production
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: APP_ORIGIN
+        value: "*"
       # Optional TURN (strict NATs / mobile data). Leave unset to use public STUN only.
       # - key: COTURN_REALM      # e.g. turn.yourdomain.com
       # - key: COTURN_SECRET     # same value as coturn static-auth-secret
