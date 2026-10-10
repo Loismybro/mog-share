@@ -6,9 +6,9 @@ export interface Device {
   id: string;
   name: string;
   platform: Platform;
-  isLocal: boolean;
-  status: 'online' | 'busy' | 'offline';
-  connType?: 'direct' | 'relay';
+  isLocal?: boolean;
+  status?: 'online' | 'busy' | 'offline';
+  connType?: string;
   rttMs?: number;
   availableBitrateBps?: number;
 }

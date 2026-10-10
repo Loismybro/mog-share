@@ -15,6 +15,7 @@ import type {
 } from '../types';
 import { formatBytes, formatSpeed, formatTime } from '../utils/formatters';
 import { haptics } from '../haptics/index.js';
+import { DiagnosticsRunner } from '../diagnostics/index.js';
 
 // ---------------------------------------------------------------------------
 // Identity helpers

@@ -103,7 +103,7 @@ export class TrustManager {
     if (!this.derivedKey) throw new Error('Shared key not derived');
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv: iv as unknown as BufferSource },
       this.derivedKey,
       frame as unknown as BufferSource
     );
@@ -124,7 +124,7 @@ export class TrustManager {
     const iv = encryptedFrame.subarray(0, 12);
     const ct = encryptedFrame.subarray(12);
     const pt = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv: iv as unknown as BufferSource },
       this.derivedKey,
       ct as unknown as BufferSource
     );

@@ -61,7 +61,7 @@ self.addEventListener('fetch', (event: any) => {
     event.respondWith(
       (async () => {
         const formData = await event.request.formData();
-        const _files = formData.getAll('files');
+        void formData.getAll('files');
         // Redirect to main app screen
         return Response.redirect('/?shared=true', 303);
       })()

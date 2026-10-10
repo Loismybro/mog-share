@@ -437,6 +437,7 @@ export class NetworkService {
       case 'request-transfer': {
         const req: IncomingRequest = {
           id: payload.transferId,
+          transferId: payload.transferId,
           fromId: remoteDeviceId,
           fromName: (payload.senderName as string) || 'Nearby Peer',
           fromPlatform: (payload.senderPlatform as Platform) || 'web',
@@ -444,6 +445,7 @@ export class NetworkService {
           sasNumeric: payload.sasNumeric,
           sasEmoji: payload.sasEmoji,
           isTrusted: payload.isTrusted,
+          receivedAt: Date.now(),
         };
 
         haptics.play('incomingRequest');
@@ -551,13 +553,18 @@ export class NetworkService {
       id: transferId,
       name: file.name,
       size: file.size,
+      type: file.type || 'application/octet-stream',
+      progress: 0,
+      speedBytesPerSec: 0,
+      speed: 0,
+      etaSeconds: 0,
       direction: 'sending',
       status: 'pending',
       bytesTransferred: 0,
-      speed: 0,
       peerId: peer.id,
       peerName: peer.name,
       channel: 'direct',
+      createdAt: Date.now(),
     };
     this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate(transfer);
@@ -840,10 +847,6 @@ export class NetworkService {
 
   public isDestroyed(): boolean {
     return this.destroyed;
-  }
-
-  public getLatencyMs(): number | null {
-    return this.latencyMs;
   }
 
   public getState(): ConnState {
