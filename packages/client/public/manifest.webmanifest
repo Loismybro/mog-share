@@ -1,31 +1,26 @@
 {
-  "name": "MOG-SHARE",
-  "short_name": "MOG-SHARE",
-  "description": "Fast and private local and online file transfer",
+  "name": "Mog Share",
+  "short_name": "Mog Share",
+  "description": "Simple cross-platform file sharing between your devices.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0E1116",
-  "theme_color": "#0E1116",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
   "icons": [
-    {
-      "src": "./favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "share_target": {
-    "action": "/#share",
+    "action": "/share-target",
     "method": "POST",
     "enctype": "multipart/form-data",
     "params": {
-      "title": "name",
-      "text": "description",
+      "title": "title",
+      "text": "text",
+      "url": "url",
       "files": [
-        {
-          "name": "files",
-          "accept": ["*/*"]
-        }
+        { "name": "files", "accept": ["*/*"] }
       ]
     }
   }

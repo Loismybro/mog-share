@@ -1,7 +1,7 @@
 {
   "name": "mog-share",
-  "version": "1.0.0",
-  "main": "index.js",
+  "version": "2.0.0",
+  "private": true,
   "workspaces": [
     "packages/*"
   ],
@@ -13,19 +13,10 @@
     "build:client": "npm run build --prefix packages/client",
     "vercel-build": "npm run build",
     "start": "npm start --prefix packages/server",
-    "test": "vitest run"
+    "test": "npm test --prefix packages/server"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
   "dependencies": {
-    "concurrently": "^10.0.5",
-    "mqtt": "^5.16.0"
-  },
-  "devDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.2.13",
-    "@types/ws": "^8.18.2",
-    "vitest": "^5.0.3"
+    "concurrently": "^10.0.5"
   }
 }

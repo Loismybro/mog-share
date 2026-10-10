@@ -9,11 +9,10 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
-// Register PWA service worker (Phase 6 F5)
-if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+// F5: PWA — register the service worker (production builds only;
+// in dev, Vite serves from memory and the SW would cache stale shells).
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((err) => {
-      console.debug('[MOG-SHARE PWA] Service worker registration failed:', err);
-    });
+    navigator.serviceWorker.register('/sw.js').catch(() => undefined);
   });
 }

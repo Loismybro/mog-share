@@ -1,34 +1,31 @@
-version: '3.8'
+# Self-hosting: Mog Share server + coturn TURN relay for strict NATs.
+#
+#   TURN_USER=mog TURN_PASS=change-me docker compose up -d
+#
+# Then build the client with:
+#   VITE_TURN_URL=turn:YOUR_HOST:3478 VITE_TURN_USER=mog VITE_TURN_PASS=change-me
 
 services:
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  mogshare:
+    build: .
+    restart: unless-stopped
     ports:
       - "4000:4000"
     environment:
       - PORT=4000
-      - NODE_ENV=production
-      - ALLOWED_ORIGINS=*
-    restart: unless-stopped
-    depends_on:
-      - coturn
+      # - CORS_ORIGINS=https://your-client.example.com
 
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
-    ports:
-      - "3478:3478/tcp"
-      - "3478:3478/udp"
-    environment:
-      - TURN_USERNAME=mogshare
-      - TURN_PASSWORD=mogshare_secret
-      - TURN_REALM=mogshare.local
-    command:
-      - "-n"
-      - "--log-file=stdout"
-      - "--external-ip=$$(detect-external-ip)"
-      - "--lt-cred-mech"
-      - "--user=mogshare:mogshare_secret"
-      - "--realm=mogshare.local"
+    network_mode: host
+    command: >
+      -n
+      --log-file=stdout
+      --lt-cred-mech
+      --fingerprint
+      --realm=mogshare
+      --listening-port=3478
+      --min-port=49160
+      --max-port=49200
+      --user=${TURN_USER:-mog}:${TURN_PASS:-change-me}
