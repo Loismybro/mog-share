@@ -1,176 +1,151 @@
 import React from 'react';
 import { 
-  Volume2, 
-  VolumeX, 
-  ClipboardCopy, 
   Settings, 
-  Wifi, 
-  Globe,
-  BookOpen
+  Activity,
+  Download,
+  Moon,
+  Sun,
+  HelpCircle
 } from 'lucide-react';
 import { MogLogo } from './MogLogo';
 import { sound } from '../utils/audio';
-import { ShareMode } from '../types';
+import { ConnectionState } from '../types';
 
 interface HeaderProps {
-  mode: ShareMode;
-  connectedPeersCount: number;
-  soundEnabled: boolean;
-  onToggleSound: () => void;
-  onOpenClipboard: () => void;
+  connectionState: ConnectionState;
+  activeMode: 'server' | 'mesh' | 'offline';
+  onOpenDiagnostics: () => void;
   onOpenSettings: () => void;
-  deviceName: string;
-  activeTab: 'transfer' | 'instructions';
-  onTabChange: (tab: 'transfer' | 'instructions') => void;
-  wsStatus?: 'connected' | 'connecting' | 'disconnected';
-  networkMode?: 'server' | 'mesh' | 'offline';
+  onOpenHelp: () => void;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
+  onDownloadZip: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  mode,
-  connectedPeersCount,
-  soundEnabled,
-  onToggleSound,
-  onOpenClipboard,
+  connectionState,
+  onOpenDiagnostics,
   onOpenSettings,
-  deviceName,
-  activeTab,
-  onTabChange,
-  wsStatus = 'connected',
-  networkMode = 'mesh',
+  onOpenHelp,
+  theme,
+  onToggleTheme,
+  onDownloadZip,
 }) => {
-  return (
-    <header className="w-full max-w-5xl mx-auto pt-6 px-4 mb-6 relative z-10 animate-pop">
-      <div className="neo-box p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 bg-[#131722] border-3 border-[#2a324b] shadow-[6px_6px_0px_#000]">
-        
-        {/* Brand Logo & Subtitle */}
-        <div 
-          className="flex items-center gap-3.5 cursor-pointer"
-          onClick={() => {
-            sound.playPop();
-            onTabChange('transfer');
-          }}
-        >
-          {/* Bespoke Geometric Non-AI Logo */}
-          <MogLogo size={46} animated={true} />
+  const getStatusColor = () => {
+    switch (connectionState) {
+      case 'ready':
+        return 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]';
+      case 'connecting':
+      case 'reconnecting':
+        return 'bg-amber-400 animate-pulse';
+      default:
+        return 'bg-rose-500';
+    }
+  };
 
-          <div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-xl sm:text-2xl font-black tracking-tight uppercase text-white font-mono leading-none">
-                MOG-SHARE
-              </span>
-              <span className="neo-badge bg-[#FFC900] text-black text-[10px] font-mono font-black tracking-wider uppercase px-2 py-0.5 rounded-md shadow-[2px_2px_0px_#000]">
-                P2P
-              </span>
-            </div>
-            <div className="text-xs font-medium text-slate-400 m-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-              <span className="font-bold text-slate-200 truncate max-w-[150px] sm:max-w-none">
-                {deviceName}
-              </span>
-              <span className="text-slate-600">•</span>
-              <span className="flex items-center gap-1 font-mono">
-                {mode === 'local' ? (
-                  <>
-                    <Wifi className="w-3.5 h-3.5 text-[#00F59B] inline stroke-[2.5]" />
-                    <span className="text-[#00F59B] font-bold uppercase">LAN (120 MB/s)</span>
-                  </>
-                ) : (
-                  <>
-                    <Globe className="w-3.5 h-3.5 text-[#60A5FA] inline stroke-[2.5]" />
-                    <span className="text-[#60A5FA] font-bold uppercase">P2P Online</span>
-                  </>
-                )}
-              </span>
-              <span className="text-slate-600">•</span>
-              <button
-                type="button"
-                onClick={() => {
-                  sound.playPop();
-                  onOpenSettings();
-                }}
-                title="Click to configure relay server settings"
-                className={`inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase px-2 py-0.5 rounded border transition-all hover:scale-105 cursor-pointer ${
-                  wsStatus === 'connected'
-                    ? 'bg-emerald-950/80 border-emerald-500/60 text-[#00F59B]'
-                    : wsStatus === 'connecting'
-                    ? 'bg-amber-950/80 border-amber-500/60 text-amber-300 animate-pulse'
-                    : 'bg-rose-950/80 border-rose-500/60 text-rose-300'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${
-                  wsStatus === 'connected' ? 'bg-[#00F59B]' : wsStatus === 'connecting' ? 'bg-amber-400' : 'bg-rose-500'
-                }`} />
-                {wsStatus === 'connected'
-                  ? networkMode === 'server' ? 'Server Live' : 'Mesh Live'
-                  : wsStatus === 'connecting' ? 'Connecting...' : 'Offline'}
-              </button>
-            </div>
+  const getStatusText = () => {
+    switch (connectionState) {
+      case 'ready':
+        return 'Connected';
+      case 'connecting':
+        return 'Connecting...';
+      case 'reconnecting':
+        return 'Reconnecting...';
+      default:
+        return 'Offline';
+    }
+  };
+
+  return (
+    <header className="w-full max-w-5xl mx-auto px-4 pt-3 pb-2 sticky top-0 z-30 bg-[#0E1116]/85 backdrop-blur-md">
+      <div className="flex items-center justify-between gap-3 py-2 px-3 mog-card rounded-2xl">
+        {/* Brand */}
+        <div className="flex items-center gap-2.5">
+          <MogLogo size={32} animated={false} />
+          <div className="flex items-baseline gap-2">
+            <span className="text-base sm:text-lg font-bold tracking-tight text-[var(--text-main)]">
+              MOG-SHARE
+            </span>
+            <span className="text-[11px] font-medium text-[var(--text-dim)] hidden sm:inline">
+              v2.0
+            </span>
           </div>
         </div>
 
-        {/* Right Actions */}
-        <div className="flex items-center gap-2.5 flex-wrap justify-center sm:justify-end">
-          
-          {/* Instructions / Transfer Hub Toggle Button */}
+        {/* Center / Right controls */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Connection status pill (Opens Diagnostics) */}
           <button
+            type="button"
             onClick={() => {
               sound.playPop();
-              onTabChange(activeTab === 'transfer' ? 'instructions' : 'transfer');
+              onOpenDiagnostics();
             }}
-            className={`neo-btn px-3 py-2 text-xs font-bold font-mono uppercase ${
-              activeTab === 'instructions'
-                ? 'bg-[#FFC900] text-black shadow-[3px_3px_0px_#000]'
-                : 'bg-[#1e2436] hover:bg-[#283048] border-2 border-black text-slate-200 hover:text-white'
-            }`}
+            title="Click to view connection diagnostics"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium bg-[var(--bg-card-subtle)] hover:bg-[var(--bg-elevated)] border border-[var(--border-subtle)] transition-all cursor-pointer min-h-[36px]"
           >
-            <BookOpen className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>{activeTab === 'instructions' ? 'Transfer Hub' : 'How To Use'}</span>
+            <span className={`w-2 h-2 rounded-full ${getStatusColor()}`} />
+            <span className="text-[var(--text-muted)] text-[12px] hidden xs:inline">
+              {getStatusText()}
+            </span>
+            <Activity className="w-3.5 h-3.5 text-[var(--text-dim)] stroke-[2]" />
           </button>
 
-          {/* Active Nodes Sticker */}
-          <div className="hidden sm:flex neo-badge bg-[#1e2436] border-[#2a324b] text-[#00F59B] items-center gap-1.5 py-1.5 px-3 shadow-[3px_3px_0px_#000]">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#00F59B] animate-pulse inline-block" />
-            <span className="font-mono">{connectedPeersCount} {connectedPeersCount === 1 ? 'Peer' : 'Peers'}</span>
-          </div>
-
-          {/* Universal Clipboard */}
+          {/* Download Final ZIP Button (User Request) */}
           <button
+            type="button"
             onClick={() => {
               sound.playPop();
-              onOpenClipboard();
+              onDownloadZip();
             }}
-            title="Universal Clipboard"
-            className="neo-btn p-2.5 bg-[#1e2436] hover:bg-[#2a324b] border-2 border-black text-slate-200 hover:text-white"
+            title="Download complete app project as .ZIP"
+            className="mog-btn mog-btn-primary !min-h-[36px] !py-1 !px-2.5 !text-xs font-semibold gap-1.5"
           >
-            <ClipboardCopy className="w-4 h-4 stroke-[2.5]" />
+            <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span className="hidden sm:inline">Download ZIP</span>
           </button>
 
-          {/* Sound Toggle */}
+          {/* Theme Toggle */}
           <button
+            type="button"
             onClick={() => {
               sound.playPop();
-              onToggleSound();
+              onToggleTheme();
             }}
-            title={soundEnabled ? 'Mute Sounds' : 'Unmute Sounds'}
-            className="neo-btn p-2.5 bg-[#1e2436] hover:bg-[#2a324b] border-2 border-black text-slate-200 hover:text-white"
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+            className="mog-btn-icon !min-w-[36px] !min-h-[36px] !p-1.5"
           >
-            {soundEnabled ? (
-              <Volume2 className="w-4 h-4 stroke-[2.5] text-[#FFC900]" />
+            {theme === 'dark' ? (
+              <Sun className="w-4 h-4 text-amber-400" />
             ) : (
-              <VolumeX className="w-4 h-4 stroke-[2.5] text-slate-500" />
+              <Moon className="w-4 h-4 text-slate-700" />
             )}
           </button>
 
-          {/* Settings */}
+          {/* Help / Instructions */}
           <button
+            type="button"
+            onClick={() => {
+              sound.playPop();
+              onOpenHelp();
+            }}
+            title="How to use & troubleshooting"
+            className="mog-btn-icon !min-w-[36px] !min-h-[36px] !p-1.5"
+          >
+            <HelpCircle className="w-4 h-4 text-[var(--text-muted)]" />
+          </button>
+
+          {/* Settings Modal */}
+          <button
+            type="button"
             onClick={() => {
               sound.playPop();
               onOpenSettings();
             }}
-            title="Hardware Preferences"
-            className="neo-btn p-2.5 bg-[#1e2436] hover:bg-[#2a324b] border-2 border-black text-slate-200 hover:text-white"
+            title="Settings & Network Configuration"
+            className="mog-btn-icon !min-w-[36px] !min-h-[36px] !p-1.5"
           >
-            <Settings className="w-4 h-4 stroke-[2.5]" />
+            <Settings className="w-4 h-4 text-[var(--text-muted)]" />
           </button>
         </div>
       </div>

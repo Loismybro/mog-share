@@ -1,0 +1,32 @@
+{
+  "name": "MOG-SHARE",
+  "short_name": "MOG-SHARE",
+  "description": "Fast and private local and online file transfer",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0E1116",
+  "theme_color": "#0E1116",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/#share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "name",
+      "text": "description",
+      "files": [
+        {
+          "name": "files",
+          "accept": ["*/*"]
+        }
+      ]
+    }
+  }
+}

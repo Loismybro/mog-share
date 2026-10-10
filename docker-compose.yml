@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - ALLOWED_ORIGINS=*
+    restart: unless-stopped
+    depends_on:
+      - coturn
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+    environment:
+      - TURN_USERNAME=mogshare
+      - TURN_PASSWORD=mogshare_secret
+      - TURN_REALM=mogshare.local
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--external-ip=$$(detect-external-ip)"
+      - "--lt-cred-mech"
+      - "--user=mogshare:mogshare_secret"
+      - "--realm=mogshare.local"

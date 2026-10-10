@@ -1,212 +1,230 @@
 @import "tailwindcss";
+@import "./styles/tokens.css";
 
-:root {
-  --canvas-dark: #0b0d13;
-  --surface-1: #131722;
-  --surface-2: #1a1f2e;
-  --surface-3: #22293d;
-  --border-dark: #2a324b;
-  --border-hard: #000000;
-  --accent-yellow: #ffc900;
-  --accent-mint: #00f59b;
-  --accent-pink: #ff90e8;
-  --accent-blue: #60a5fa;
-  --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --text-dim: #64748b;
+/* Base HTML & Body Settings */
+html {
+  font-family: var(--font-ui);
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  color-scheme: dark light;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--canvas-dark);
+  background-color: var(--bg-app);
   color: var(--text-main);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100dvh;
   overflow-x: hidden;
-  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Premium Tactical Dark Canvas Background */
-.tactical-canvas-bg {
-  background-color: #0b0d13;
-  background-image: 
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 36px 36px;
-  position: relative;
+/* Card Container (Phase 5: 16px radius, 1px border, soft shadow, no muddy black offset) */
+.mog-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-/* Neo-Brutalist Matte Dark Containers */
-.neo-box {
-  background-color: #131722;
-  border: 3px solid #2a324b;
-  box-shadow: 6px 6px 0px #000000;
-  border-radius: 20px;
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+.mog-card:hover {
+  border-color: var(--border-active);
 }
 
-.neo-box:hover {
-  border-color: #3e4868;
-}
-
-.neo-box-interactive:hover {
-  transform: translate(-2px, -2px);
-  box-shadow: 8px 8px 0px #000000;
-  border-color: #52608a;
-}
-
-.neo-box-interactive:active {
-  transform: translate(2px, 2px);
-  box-shadow: 2px 2px 0px #000000;
-}
-
-/* Tactical Neo-Brutalist Buttons */
-.neo-btn {
-  border: 2.5px solid #000000;
-  font-weight: 800;
-  box-shadow: 4px 4px 0px #000000;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+.mog-card-interactive {
   cursor: pointer;
+}
+
+.mog-card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-elevated);
+  border-color: var(--accent-primary);
+}
+
+.mog-card-interactive:active {
+  transform: translateY(0);
+}
+
+/* Buttons (Touch target >= 44px, one yellow accent) */
+.mog-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  border-radius: 14px;
+  min-height: 44px;
+  padding: 0.5rem 1.125rem;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid transparent;
+  outline: none;
 }
 
-.neo-btn:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 6px 6px 0px #000000;
+.mog-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 
-.neo-btn:active {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0px #000000;
+.mog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
-.neo-btn-yellow {
-  background-color: #ffc900;
-  color: #000000;
-}
-.neo-btn-yellow:hover {
-  background-color: #ffd42a;
+.mog-btn-primary {
+  background-color: var(--accent-primary);
+  color: var(--accent-primary-text);
+  border-color: var(--accent-primary);
 }
 
-.neo-btn-mint {
-  background-color: #00f59b;
-  color: #000000;
-}
-.neo-btn-mint:hover {
-  background-color: #24fdb0;
+.mog-btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-primary-hover);
+  transform: translateY(-1px);
 }
 
-.neo-btn-pink {
-  background-color: #ff90e8;
-  color: #000000;
-}
-.neo-btn-pink:hover {
-  background-color: #ffa3ec;
+.mog-btn-secondary {
+  background-color: var(--bg-card-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
 }
 
-.neo-btn-dark {
-  background-color: #1e2436;
-  color: #f8fafc;
-  border-color: #000000;
-}
-.neo-btn-dark:hover {
-  background-color: #283048;
+.mog-btn-secondary:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+  border-color: var(--border-active);
 }
 
-/* Tactical Badges */
-.neo-badge {
-  border: 2px solid #000000;
-  font-family: ui-monospace, monospace;
-  font-weight: 900;
-  text-transform: uppercase;
+.mog-btn-danger {
+  background-color: var(--status-error-bg);
+  color: var(--status-error);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.mog-btn-danger:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.2);
+}
+
+.mog-btn-icon {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mog-btn-icon:hover {
+  background-color: var(--bg-card-subtle);
+  color: var(--text-main);
+}
+
+.mog-btn-icon:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Subtle Radar / Pulse Animation for empty state (Phase 5: ~120px) */
+@keyframes radar-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.2;
+  }
+  100% {
+    transform: scale(0.85);
+    opacity: 0.8;
+  }
+}
+
+.animate-radar-pulse {
+  animation: radar-pulse 3s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* Input Fields */
+.mog-input {
+  min-height: 44px;
+  padding: 0.5rem 0.875rem;
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-size: 0.9375rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mog-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(255, 201, 0, 0.2);
+}
+
+/* Status Badges */
+.mog-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 8px;
-  box-shadow: 2px 2px 0px #000000;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-pill);
+  line-height: 1;
 }
 
-/* Animations */
-@keyframes float-slow {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(-8px) rotate(1deg); }
+.mog-badge-direct {
+  background-color: var(--status-success-bg);
+  color: var(--status-success);
+  border: 1px solid rgba(16, 185, 129, 0.25);
 }
 
-.animate-float-slow {
-  animation: float-slow 6s ease-in-out infinite;
+.mog-badge-relayed {
+  background-color: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid rgba(245, 158, 11, 0.25);
 }
 
-@keyframes float-reverse {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(8px) rotate(-1deg); }
-}
-
-.animate-float-reverse {
-  animation: float-reverse 7s ease-in-out infinite;
-}
-
-@keyframes radar-sweep {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.animate-sweep {
-  animation: radar-sweep 4.5s linear infinite;
-}
-
-@keyframes pop-in {
-  0% { transform: scale(0.96) translateY(12px); opacity: 0; }
-  100% { transform: scale(1) translateY(0); opacity: 1; }
-}
-
-.animate-pop {
-  animation: pop-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-/* Striped Progress Bar for Transfer Dock */
-@keyframes stripes {
-  0% { background-position: 0 0; }
-  100% { background-position: 40px 0; }
-}
-
-.striped-progress {
-  background-image: linear-gradient(
-    45deg,
-    rgba(0, 0, 0, 0.25) 25%,
-    transparent 25%,
-    transparent 50%,
-    rgba(0, 0, 0, 0.25) 50%,
-    rgba(0, 0, 0, 0.25) 75%,
-    transparent 75%,
-    transparent
-  );
-  background-size: 40px 40px;
-  animation: stripes 1s linear infinite;
-}
-
-/* Custom Tactical Scrollbar */
+/* Modern Scrollbars */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0b0d13;
-  border-left: 2px solid #1a1f2e;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a324b;
-  border: 2px solid #000;
+  background: var(--border-subtle);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #ffc900;
+  background: var(--text-dim);
 }

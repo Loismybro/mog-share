@@ -36,99 +36,116 @@ export const ClipboardSyncModal: React.FC<ClipboardSyncModalProps> = ({
     setInputText('');
   };
 
+  // F2: Robust copy with fallback to execCommand for HTTP LAN pages
   const copyToLocal = (id: string, text: string) => {
     sound.playPop();
-    navigator.clipboard.writeText(text);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const fallbackCopy = (text: string) => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch {}
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-pop">
-      <div className="neo-box p-6 max-w-lg w-full bg-[#131722] border-3 border-[#2a324b] shadow-[8px_8px_0px_#000] relative text-white">
-        
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-pop">
+      <div className="mog-card p-6 max-w-lg w-full bg-[var(--bg-card)] rounded-2xl relative shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b-2 border-[#2a324b] mb-4">
+        <div className="flex items-center justify-between pb-3 mb-4 border-b border-[var(--border-subtle)]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#FFC900] border-2 border-black flex items-center justify-center">
-              <Clipboard className="w-5 h-5 text-black stroke-[2.5]" />
-            </div>
-            <h3 className="text-base font-black uppercase text-white m-0 font-mono">
+            <Clipboard className="w-5 h-5 text-[var(--accent-primary)]" />
+            <h3 className="text-base font-bold text-[var(--text-main)] m-0">
               Universal Clipboard Sync
             </h3>
           </div>
           <button
+            type="button"
             onClick={() => {
               sound.playPop();
               onClose();
             }}
-            className="p-1 rounded-lg hover:bg-[#1e2436] text-slate-400 hover:text-white cursor-pointer"
+            className="mog-btn-icon !min-w-[32px] !min-h-[32px] !p-1 text-[var(--text-muted)]"
           >
-            <X className="w-5 h-5 stroke-[2.5]" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Input Form */}
         <form onSubmit={handleSend} className="space-y-2 mb-5">
-          <label className="text-xs font-bold text-slate-400 block uppercase font-mono">
-            Broadcast text, tokens, or links to all connected devices:
+          <label className="text-xs font-medium text-[var(--text-muted)] block">
+            Broadcast text or links to all connected devices on this network:
           </label>
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Paste or type text to broadcast..."
+              placeholder="Paste or type text to share..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              className="flex-1 px-4 py-2.5 rounded-xl border-3 border-[#2a324b] bg-[#0e111a] text-white text-xs font-mono font-bold shadow-[2px_2px_0px_#000] focus:outline-none focus:border-[#FFC900]"
+              className="flex-1 mog-input text-xs"
             />
             <button
               type="submit"
               disabled={!inputText.trim()}
-              className="neo-btn neo-btn-yellow px-4 py-2.5 text-xs font-black uppercase disabled:opacity-40"
+              className="mog-btn mog-btn-primary !min-h-[44px] !px-4 text-xs font-semibold gap-1.5"
             >
-              <Send className="w-3.5 h-3.5 stroke-[3]" />
-              <span>Broadcast</span>
+              <Send className="w-3.5 h-3.5" />
+              <span>Send</span>
             </button>
           </div>
         </form>
 
         {/* Received Items */}
         <div>
-          <span className="text-xs font-black uppercase text-slate-300 block mb-2 font-mono">
+          <span className="text-xs font-semibold text-[var(--text-muted)] block mb-2">
             Synced Clipboard Feed ({receivedItems.length})
           </span>
 
           {receivedItems.length === 0 ? (
-            <div className="p-4 rounded-xl border-2 border-dashed border-[#2a324b] text-center text-xs text-slate-500 font-medium italic bg-[#0e111a]">
-              No synced clipboard items yet. Any device sharing clipboard will appear here instantly.
+            <div className="p-4 rounded-xl border border-dashed border-[var(--border-subtle)] text-center text-xs text-[var(--text-dim)] bg-[var(--bg-app)]">
+              No synced clipboard items yet. When another device shares clipboard text, it will appear here instantly.
             </div>
           ) : (
             <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
               {receivedItems.map((item) => (
                 <div
                   key={item.id}
-                  className="p-3 rounded-xl bg-[#1a1f2e] border-2 border-[#2a324b] flex items-center justify-between text-xs shadow-[2px_2px_0px_#000]"
+                  className="p-3 rounded-xl bg-[var(--bg-app)] border border-[var(--border-subtle)] flex items-center justify-between text-xs"
                 >
                   <div className="min-w-0 pr-2">
-                    <p className="font-mono font-bold text-slate-200 truncate m-0 select-all">
+                    <p className="font-mono text-[var(--text-main)] truncate m-0 select-all">
                       {item.content}
                     </p>
-                    <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5 mt-0.5 m-0">
+                    <p className="text-[11px] text-[var(--text-muted)] flex items-center gap-1.5 mt-0.5 m-0">
                       <span>From {item.fromDevice}</span>
                       <span>•</span>
-                      <Clock className="w-2.5 h-2.5" />
+                      <Clock className="w-2.5 h-2.5 text-[var(--text-dim)]" />
                       <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
                     </p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => copyToLocal(item.id, item.content)}
-                    className="neo-btn neo-btn-mint p-2 text-black shrink-0"
+                    className="mog-btn mog-btn-secondary !min-h-[32px] !min-w-[32px] !p-1.5 text-xs shrink-0"
                     title="Copy to Clipboard"
                   >
                     {copiedId === item.id ? (
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
                     ) : (
-                      <Copy className="w-3.5 h-3.5 stroke-[3]" />
+                      <Copy className="w-3.5 h-3.5" />
                     )}
                   </button>
                 </div>

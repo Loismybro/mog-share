@@ -1,134 +1,216 @@
 import React, { useState } from 'react';
 import { 
-  ArrowDownCircle, 
-  ArrowUpCircle, 
-  CheckCircle2, 
-  XCircle, 
+  ArrowUp, 
+  ArrowDown, 
+  CheckCircle, 
   Download, 
-  Activity, 
   ChevronUp, 
-  ChevronDown 
+  ChevronDown,
+  RotateCcw,
+  Archive,
+  FileIcon,
+  X
 } from 'lucide-react';
 import { TransferFile } from '../types';
 import { formatBytes, formatSpeed, formatTime } from '../utils/formatters';
 import { sound } from '../utils/audio';
+import * as fflate from 'fflate';
 
 interface TransferDockProps {
   transfers: TransferFile[];
   onCancelTransfer: (id: string) => void;
+  onRetryTransfer?: (id: string) => void;
   onClearCompleted: () => void;
+  onSaveFile: (transfer: TransferFile) => void;
 }
 
 export const TransferDock: React.FC<TransferDockProps> = ({
   transfers,
   onCancelTransfer,
+  onRetryTransfer,
   onClearCompleted,
+  onSaveFile,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isZipping, setIsZipping] = useState(false);
 
   if (transfers.length === 0) return null;
 
-  const activeTransfer = transfers.find((t) => t.status === 'transferring');
-  const completedCount = transfers.filter((t) => t.status === 'completed').length;
+  const activeTransfers = transfers.filter(
+    (t) => t.status === 'transferring' || t.status === 'connecting' || t.status === 'waiting'
+  );
+  const primaryActive = activeTransfers[0];
+  const completedTransfers = transfers.filter((t) => t.status === 'completed' && t.blobUrl);
+
+  // F3: Download All as ZIP using fflate
+  const handleDownloadAllZip = async () => {
+    if (completedTransfers.length === 0 || isZipping) return;
+    setIsZipping(true);
+    sound.playPop();
+
+    try {
+      const zipEntries: Record<string, Uint8Array> = {};
+
+      for (const item of completedTransfers) {
+        if (item.blobUrl) {
+          const res = await fetch(item.blobUrl);
+          const buf = await res.arrayBuffer();
+          zipEntries[item.name] = new Uint8Array(buf);
+        }
+      }
+
+      fflate.zip(zipEntries, (err, out) => {
+        setIsZipping(false);
+        if (err || !out) return;
+
+        const blob = new Blob([out as unknown as BlobPart], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `mog_share_bundle_${Date.now()}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 1000);
+      });
+    } catch (e) {
+      setIsZipping(false);
+      console.error('ZIP generation error:', e);
+    }
+  };
+
+  const getStatusLabel = (t: TransferFile) => {
+    switch (t.status) {
+      case 'transferring':
+        return `${t.progress}%`;
+      case 'connecting':
+        return 'Connecting...';
+      case 'waiting':
+        return 'Waiting...';
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return t.errorReason || 'Failed';
+      case 'declined':
+        return 'Declined';
+      case 'expired':
+        return 'Expired (no response)';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return t.status;
+    }
+  };
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 max-w-xl mx-auto z-40 animate-pop">
-      <div className="neo-box p-4 bg-[#131722] border-3 border-[#2a324b] shadow-[8px_8px_0px_#000] text-white">
-        
+    <div className="fixed bottom-0 left-0 right-0 z-40 max-w-2xl mx-auto px-4 pb-2 sm:pb-4 animate-pop">
+      <div className="mog-card rounded-2xl bg-[var(--bg-card)]/95 backdrop-blur-md shadow-2xl border border-[var(--border-subtle)] overflow-hidden">
         {/* Header Bar */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {activeTransfer ? (
-              <div className="w-10 h-10 rounded-xl bg-[#00F59B] border-2 border-black shadow-[2px_2px_0px_#000] flex items-center justify-center">
-                {activeTransfer.direction === 'sending' ? (
-                  <ArrowUpCircle className="w-6 h-6 text-black stroke-[2.5] animate-bounce" />
+        <div className="p-3.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            {primaryActive ? (
+              <div className="w-8 h-8 rounded-lg bg-[var(--accent-primary)] text-[var(--accent-primary-text)] flex items-center justify-center shrink-0">
+                {primaryActive.direction === 'sending' ? (
+                  <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                 ) : (
-                  <ArrowDownCircle className="w-6 h-6 text-black stroke-[2.5] animate-bounce" />
+                  <ArrowDown className="w-4 h-4 stroke-[2.5]" />
                 )}
               </div>
             ) : (
-              <div className="w-10 h-10 rounded-xl bg-[#00F59B] border-2 border-black shadow-[2px_2px_0px_#000] flex items-center justify-center">
-                <CheckCircle2 className="w-6 h-6 text-black stroke-[2.5]" />
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                <CheckCircle className="w-4 h-4 stroke-[2.5]" />
               </div>
             )}
 
-            <div>
-              <div className="text-xs font-black uppercase text-white flex items-center gap-2 font-mono">
-                {activeTransfer ? (
-                  <>
-                    <span>
-                      {activeTransfer.direction === 'sending' ? 'Sending to' : 'Receiving from'}{' '}
-                      {activeTransfer.peerName}
-                    </span>
-                    <span className="neo-badge bg-[#FFC900] text-black text-[10px] py-0 px-1">
-                      {activeTransfer.progress}%
-                    </span>
-                  </>
-                ) : (
-                  <span className="neo-badge bg-[#00F59B] text-black">
-                    Transfers Complete ({completedCount})
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-[var(--text-main)] truncate">
+                  {primaryActive ? (
+                    <>
+                      {primaryActive.direction === 'sending' ? 'Sending to ' : 'Receiving from '}
+                      <span className="text-[var(--accent-primary)]">{primaryActive.peerName}</span>
+                    </>
+                  ) : (
+                    <span>All Transfers Finished ({completedTransfers.length})</span>
+                  )}
+                </span>
+
+                {primaryActive && (
+                  <span className="text-[11px] font-mono font-bold text-[var(--text-muted)]">
+                    {primaryActive.progress}%
                   </span>
                 )}
               </div>
 
-              {activeTransfer && (
-                <div className="text-[11px] font-mono font-bold text-slate-400 flex items-center gap-2 mt-0.5">
-                  <span className="flex items-center gap-1 text-[#00F59B]">
-                    <Activity className="w-3.5 h-3.5 stroke-[2.5]" />
-                    {formatSpeed(activeTransfer.speedBytesPerSec)}
-                  </span>
+              {primaryActive && (
+                <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] mt-0.5">
+                  <span className="font-mono">{formatSpeed(primaryActive.speedBytesPerSec)}</span>
                   <span>•</span>
-                  <span>ETA {formatTime(activeTransfer.etaSeconds)}</span>
+                  <span>ETA {formatTime(primaryActive.etaSeconds)}</span>
+                  <span>•</span>
+                  <span className={`mog-badge ${primaryActive.relayed ? 'mog-badge-relayed' : 'mog-badge-direct'} !text-[10px]`}>
+                    {primaryActive.relayed ? 'Relayed' : 'Direct'}
+                  </span>
                 </div>
               )}
             </div>
           </div>
 
-          <button
-            onClick={() => {
-              sound.playPop();
-              setIsExpanded(!isExpanded);
-            }}
-            className="neo-btn neo-btn-dark p-1.5"
-            title="Toggle Queue"
-          >
-            {isExpanded ? <ChevronDown className="w-4 h-4 stroke-[3]" /> : <ChevronUp className="w-4 h-4 stroke-[3]" />}
-          </button>
+          <div className="flex items-center gap-2">
+            {completedTransfers.length > 1 && (
+              <button
+                type="button"
+                onClick={handleDownloadAllZip}
+                disabled={isZipping}
+                title="Download all received files as a single ZIP (F3)"
+                className="mog-btn mog-btn-secondary !min-h-[32px] !py-1 !px-2.5 !text-xs font-semibold gap-1.5"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isZipping ? 'Zipping...' : 'Download ZIP'}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                sound.playPop();
+                setIsExpanded(!isExpanded);
+              }}
+              className="mog-btn-icon !min-w-[32px] !min-h-[32px] !p-1.5"
+              title="Toggle transfer sheet"
+            >
+              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
 
-        {/* Striped Progress Bar */}
-        {activeTransfer && (
-          <div className="mt-3">
-            <div className="w-full h-4 rounded-xl bg-[#0e111a] border-2 border-[#2a324b] overflow-hidden relative shadow-inner">
-              <div
-                className="h-full bg-[#00F59B] striped-progress transition-all duration-300 border-r-2 border-black"
-                style={{ width: `${activeTransfer.progress}%` }}
-              />
-            </div>
-            <div className="flex justify-between items-center text-[10px] font-mono font-bold text-slate-400 mt-1">
-              <span className="truncate max-w-[200px]">{activeTransfer.name}</span>
-              <span>
-                {formatBytes((activeTransfer.size * activeTransfer.progress) / 100)} /{' '}
-                {formatBytes(activeTransfer.size)}
-              </span>
-            </div>
+        {/* Linear progress bar for primary active transfer */}
+        {primaryActive && (
+          <div className="w-full h-1.5 bg-[var(--bg-app)] overflow-hidden">
+            <div
+              className="h-full bg-[var(--accent-primary)] transition-all duration-150"
+              style={{ width: `${primaryActive.progress}%` }}
+            />
           </div>
         )}
 
-        {/* Expanded History */}
+        {/* Expanded Sheet: List of all files in session */}
         {isExpanded && (
-          <div className="mt-4 pt-3 border-t-2 border-[#2a324b] max-h-48 overflow-y-auto space-y-2">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300 mb-1">
-              <span className="uppercase font-mono">Transfer Log</span>
-              {completedCount > 0 && (
+          <div className="p-3.5 pt-2 border-t border-[var(--border-subtle)] max-h-60 overflow-y-auto space-y-2">
+            <div className="flex items-center justify-between text-xs pb-1">
+              <span className="font-medium text-[var(--text-muted)]">Transfer Activity</span>
+              {completedTransfers.length > 0 && (
                 <button
+                  type="button"
                   onClick={() => {
                     sound.playPop();
                     onClearCompleted();
                   }}
-                  className="text-[#60A5FA] hover:underline cursor-pointer"
+                  className="text-xs text-[var(--accent-primary)] hover:underline font-medium"
                 >
-                  Clear Finished
+                  Clear Completed
                 </button>
               )}
             </div>
@@ -136,44 +218,76 @@ export const TransferDock: React.FC<TransferDockProps> = ({
             {transfers.map((item) => (
               <div
                 key={item.id}
-                className="flex items-center justify-between p-2.5 rounded-xl bg-[#1a1f2e] border-2 border-[#2a324b] text-xs shadow-[2px_2px_0px_#000]"
+                className="p-2.5 rounded-xl bg-[var(--bg-card-subtle)] border border-[var(--border-subtle)] flex items-center justify-between gap-3 text-xs"
               >
-                <div className="flex items-center gap-2 min-w-0 pr-2">
-                  {item.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-[#00F59B] stroke-[2.5]" />}
-                  {item.status === 'cancelled' && <XCircle className="w-4 h-4 text-slate-500 stroke-[2.5]" />}
-                  {item.status === 'transferring' && <Activity className="w-4 h-4 text-[#FFC900] stroke-[2.5] animate-pulse" />}
-                  
-                  <div className="min-w-0">
-                    <p className="truncate font-bold text-white m-0">{item.name}</p>
-                    <p className="text-[10px] text-slate-400 font-mono font-bold m-0">
-                      {formatBytes(item.size)} • {item.direction === 'sending' ? 'To' : 'From'}{' '}
-                      {item.peerName}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  {item.thumbnailUrl ? (
+                    <img
+                      src={item.thumbnailUrl}
+                      alt={item.name}
+                      className="w-8 h-8 rounded object-cover border border-[var(--border-subtle)] shrink-0"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded bg-[var(--bg-elevated)] flex items-center justify-center shrink-0 text-[var(--text-muted)]">
+                      <FileIcon className="w-4 h-4" />
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-[var(--text-main)] truncate m-0">
+                      {item.name}
                     </p>
+                    <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] mt-0.5">
+                      <span>{formatBytes(item.size)}</span>
+                      <span>•</span>
+                      <span>{item.direction === 'sending' ? 'To ' : 'From '}{item.peerName}</span>
+                      <span>•</span>
+                      <span className={item.status === 'completed' ? 'text-emerald-400 font-medium' : item.status === 'failed' ? 'text-red-400 font-medium' : ''}>
+                        {getStatusLabel(item)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* Per-row Actions: Save, Cancel, Retry */}
+                <div className="flex items-center gap-1.5 shrink-0">
                   {item.status === 'completed' && item.blobUrl && (
-                    <a
-                      href={item.blobUrl}
-                      download={item.name}
-                      onClick={() => sound.playPop()}
-                      className="neo-btn neo-btn-mint p-1.5 text-black"
-                      title="Download Received File"
+                    <button
+                      type="button"
+                      onClick={() => onSaveFile(item)}
+                      title="Save File to Disk (T8)"
+                      className="mog-btn mog-btn-primary !min-h-[32px] !py-1 !px-2.5 !text-xs font-semibold gap-1"
                     >
-                      <Download className="w-3.5 h-3.5 stroke-[3]" />
-                    </a>
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Save</span>
+                    </button>
                   )}
 
-                  {item.status === 'transferring' && (
+                  {(item.status === 'transferring' || item.status === 'connecting' || item.status === 'waiting') && (
                     <button
+                      type="button"
                       onClick={() => {
                         sound.playPop();
                         onCancelTransfer(item.id);
                       }}
-                      className="p-1 text-slate-500 hover:text-rose-400 cursor-pointer"
+                      title="Cancel Transfer (T4)"
+                      className="p-1.5 text-[var(--text-dim)] hover:text-red-400 rounded-lg hover:bg-[var(--bg-app)]"
                     >
-                      <XCircle className="w-4 h-4 stroke-[2.5]" />
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {(item.status === 'failed' || item.status === 'expired' || item.status === 'cancelled') && onRetryTransfer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playPop();
+                        onRetryTransfer(item.id);
+                      }}
+                      title="Retry Transfer (T9)"
+                      className="p-1.5 text-[var(--text-dim)] hover:text-[var(--accent-primary)] rounded-lg hover:bg-[var(--bg-app)]"
+                    >
+                      <RotateCcw className="w-4 h-4" />
                     </button>
                   )}
                 </div>

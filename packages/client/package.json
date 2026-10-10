@@ -18,13 +18,14 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "canvas-confetti": "^1.9.4",
+    "fflate": "^0.8.3",
     "lucide-react": "^1.44.0",
     "mqtt": "^5.16.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3",
-    "typescript": "~6.0.2",
+    "typescript": "^5.7.2",
     "vite": "^8.3.0"
   },
   "devDependencies": {
