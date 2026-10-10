@@ -92,7 +92,7 @@ export class LocalGroupIndex {
     return result;
   }
 
-  public scheduleDisconnect(deviceId: string, onRemove: () => void) {
+  public scheduleDisconnect(deviceId: string, onRemove: (departedPeers: DeviceSession[]) => void) {
     const session = this.devices.get(deviceId);
     if (!session) return;
 
@@ -101,8 +101,9 @@ export class LocalGroupIndex {
     }
 
     session.disconnectTimer = setTimeout(() => {
+      const peersToNotify = this.getVisiblePeers(deviceId);
       this.removeDevice(deviceId);
-      onRemove();
+      onRemove(peersToNotify);
     }, LOCAL_GROUP_DISCONNECT_GRACE_MS);
   }
 

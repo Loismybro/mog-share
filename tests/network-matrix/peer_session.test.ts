@@ -179,4 +179,39 @@ describe('Phase 3: PeerSession with Perfect Negotiation & Path Badge', () => {
 
     orchestrator.destroy();
   });
+
+  it('buffers control messages until ctlChannel is open', () => {
+    class ConnectingDataChannel extends MockRTCDataChannel {
+      constructor(label: string, options: any) {
+        super(label, options);
+        this.readyState = 'connecting';
+      }
+    }
+    class ConnectingPeerConnection extends MockRTCPeerConnection {
+      createDataChannel(label: string, options: any) {
+        return new ConnectingDataChannel(label, options);
+      }
+    }
+    (globalThis as any).RTCPeerConnection = ConnectingPeerConnection;
+
+    const session = new PeerSession({
+      localDeviceId: 'dev_1',
+      remoteDeviceId: 'dev_2',
+      iceServers: [],
+      onSignal: vi.fn(),
+    });
+
+    const ctlChannel = session.ctl as unknown as ConnectingDataChannel;
+    expect(ctlChannel.readyState).toBe('connecting');
+
+    session.sendCtl({ type: 'request-transfer', payload: { test: true } });
+    expect(ctlChannel.sentMessages).toHaveLength(0);
+
+    ctlChannel.readyState = 'open';
+    ctlChannel.onopen?.();
+
+    expect(ctlChannel.sentMessages).toHaveLength(1);
+    expect(ctlChannel.sentMessages[0]).toContain('request-transfer');
+    session.close();
+  });
 });

@@ -229,7 +229,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       gateway.registerConnection({ deviceId: fromId, transport: 'ws', ws });
     }
 
-    if (boundDeviceId && !gateway.checkRateLimit(boundDeviceId)) {
+    if (envelope.type !== 'relay-frame' && boundDeviceId && !gateway.checkRateLimit(boundDeviceId)) {
       ws.send(JSON.stringify(createEnvelope('error', { message: 'Rate limit exceeded' })));
       return;
     }
@@ -240,9 +240,15 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   ws.on('close', () => {
     metrics.activeSessions = Math.max(0, metrics.activeSessions - 1);
     if (boundDeviceId) {
-      gateway.removeConnection(boundDeviceId);
-      groupIndex.scheduleDisconnect(boundDeviceId, () => {
-        broadcastGroupPresence(boundDeviceId!);
+      const departingId = boundDeviceId;
+      gateway.removeConnection(departingId);
+      groupIndex.scheduleDisconnect(departingId, (peersToNotify) => {
+        for (const peer of peersToNotify) {
+          gateway.sendToClient(
+            peer.deviceId,
+            createEnvelope('peer-left', { deviceId: departingId })
+          );
+        }
       });
 
       // R5: Room departure & host handover
@@ -301,6 +307,22 @@ function handleIncomingSocketMessage(
           })
         )
       );
+
+      // Immediately send existing visible peers snapshot to joiner (D1)
+      const visible = groupIndex.getVisiblePeers(from);
+      if (visible.length > 0) {
+        ws.send(
+          JSON.stringify(
+            createEnvelope('group-presence', {
+              peers: visible.map((p) => ({
+                id: p.deviceId,
+                name: p.name,
+                platform: p.platform,
+              })),
+            })
+          )
+        );
+      }
       break;
     }
 
@@ -364,7 +386,15 @@ function handleIncomingSocketMessage(
     case 'ping': {
       if (from) {
         groupIndex.markHeartbeatComplete(from);
-        ws.send(JSON.stringify(createEnvelope('pong', { timestamp: Date.now() }, { to: from })));
+        ws.send(
+          JSON.stringify(
+            createEnvelope(
+              'pong',
+              { timestamp: Date.now(), clientTime: payload?.clientTime },
+              { to: from }
+            )
+          )
+        );
         // Presence is broadcast only after heartbeat completes
         broadcastGroupPresence(from);
       }

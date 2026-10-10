@@ -134,6 +134,7 @@ export class NetworkService {
   private destroyed = false;
   private latencyMs: number | null = null;
   private lastPingSent = 0;
+  private pendingRoomAction: (() => void) | null = null;
 
   constructor(
     deviceName: string,
@@ -206,7 +207,18 @@ export class NetworkService {
         onStateChange: (state, rung) => {
           if (state === 'connected') {
             this.sendJoinMessage();
+            if (this.currentRoomCode) {
+              this.signaling?.send('join-room', {
+                roomCode: this.currentRoomCode,
+                password: this.roomPassphrase || undefined,
+              });
+            }
             this.setState('ready', `Connected via ${rung.toUpperCase()} transport`);
+            if (this.pendingRoomAction) {
+              const act = this.pendingRoomAction;
+              this.pendingRoomAction = null;
+              act();
+            }
           } else if (state === 'connecting') {
             this.setState('connecting', `Connecting via ${rung.toUpperCase()} ladder...`);
           } else {
@@ -240,13 +252,14 @@ export class NetworkService {
 
   private sendJoinMessage() {
     if (!this.signaling || !this.probeResult) return;
-    this.lastPingSent = Date.now();
     this.signaling.send('join', {
       name: this.deviceName,
       platform: this.platform,
       networkKeys: this.probeResult.networkKeys,
       resumeToken: this.signaling.getResumeToken(),
     });
+    this.lastPingSent = Date.now();
+    this.signaling.send('ping', { clientTime: this.lastPingSent });
   }
 
   private handleSignalingEnvelope(envelope: SignalingEnvelope) {
@@ -254,9 +267,18 @@ export class NetworkService {
 
     switch (type) {
       case 'pong': {
-        if (this.lastPingSent > 0) {
-          this.latencyMs = Date.now() - this.lastPingSent;
+        const clientTime = payload?.clientTime as number | undefined;
+        if (typeof clientTime === 'number' && clientTime > 0) {
+          this.latencyMs = Math.max(1, Date.now() - clientTime);
+        } else if (this.lastPingSent > 0) {
+          this.latencyMs = Math.max(1, Date.now() - this.lastPingSent);
         }
+        break;
+      }
+
+      case 'error': {
+        const msg = (payload?.message as string) || (payload?.error as string) || 'Server error';
+        this.callbacks.onError(msg);
         break;
       }
 
@@ -375,7 +397,12 @@ export class NetworkService {
       case 'signal': {
         if (!from) return;
         const bundle = this.getOrCreatePeerBundle(from);
-        bundle.peerSession.handleSignal(payload.signal as PeerSignal);
+        if (payload.signal) {
+          bundle.peerSession.handleSignal(payload.signal as PeerSignal);
+        }
+        if (payload.ctl) {
+          this.handleCtlMessage(from, payload.ctl);
+        }
         break;
       }
 
@@ -613,10 +640,17 @@ export class NetworkService {
       0,
       {
         sendDataChannel: (frame) => {
-          bundle.peerSession.sendData(frame);
+          if (bundle.peerSession.data.readyState === 'open') {
+            bundle.peerSession.sendData(frame);
+          } else {
+            void bundle.relayTransport.send(frame);
+          }
         },
         sendCtlMessage: (msg) => {
           bundle.peerSession.sendCtl(msg);
+          if (bundle.peerSession.ctl.readyState !== 'open') {
+            this.signaling?.send('signal', { ctl: msg }, peer.id);
+          }
         },
         getBufferedAmount: () => bundle.peerSession.getBufferedAmount(),
         waitForBufferedAmountLow: () => bundle.peerSession.waitForBufferedAmountLow(),
@@ -650,8 +684,8 @@ export class NetworkService {
 
     this.activeSenders.set(transferId, senderPipeline);
 
-    // Send transfer request to remote peer over ctl channel
-    bundle.peerSession.sendCtl({
+    // Send transfer request to remote peer over ctl channel with signaling fallback
+    const reqPayload = {
       type: 'request-transfer',
       payload: {
         transferId,
@@ -667,15 +701,25 @@ export class NetworkService {
         sasEmoji: sas.sasEmoji,
         isTrusted: sas.isTrusted,
       },
-    });
+    };
+    bundle.peerSession.sendCtl(reqPayload);
+    if (bundle.peerSession.ctl.readyState !== 'open') {
+      this.signaling?.send('signal', { ctl: reqPayload }, peer.id);
+    }
   }
 
   public async respondToRequest(req: IncomingRequest, accept: boolean): Promise<void> {
     const bundle = this.getOrCreatePeerBundle(req.fromId);
     const transferId = req.transferId || req.id || '';
+    const sendCtlSafe = (msg: unknown) => {
+      bundle.peerSession.sendCtl(msg);
+      if (bundle.peerSession.ctl.readyState !== 'open') {
+        this.signaling?.send('signal', { ctl: msg }, req.fromId);
+      }
+    };
 
     if (!accept) {
-      bundle.peerSession.sendCtl({
+      sendCtlSafe({
         type: 'decline-transfer',
         payload: { transferId },
       });
@@ -732,7 +776,7 @@ export class NetworkService {
       writer,
       {
         sendCtlMessage: (msg) => {
-          bundle.peerSession.sendCtl(msg);
+          sendCtlSafe(msg);
         },
         onProgress: (verifiedBytes, _totalBytes) => {
           transfer.bytesTransferred = verifiedBytes;
@@ -782,11 +826,11 @@ export class NetworkService {
     this.activeReceivers.set(transferId, receiverPipeline);
 
     // Accept transfer and issue initial flow control credits
-    bundle.peerSession.sendCtl({
+    sendCtlSafe({
       type: 'accept-transfer',
       payload: { transferId },
     });
-    bundle.peerSession.sendCtl({
+    sendCtlSafe({
       type: 'credit-grant',
       payload: { transferId, credits: DEFAULT_CREDIT_WINDOW_BLOCKS },
     });
@@ -836,6 +880,10 @@ export class NetworkService {
   // Rooms & Direct Messaging
   // -------------------------------------------------------------------------
   public createRoom(password?: string) {
+    if (this.state !== 'ready') {
+      this.pendingRoomAction = () => this.createRoom(password);
+      return;
+    }
     this.signaling?.send('create-room', { password });
   }
 
@@ -843,6 +891,10 @@ export class NetworkService {
     const norm = normalizeRoomCode(code);
     if (norm.length !== ROOM_CODE_LENGTH) {
       this.callbacks.onRoomError(`Room code must be ${ROOM_CODE_LENGTH} characters.`);
+      return;
+    }
+    if (this.state !== 'ready') {
+      this.pendingRoomAction = () => this.joinRoom(norm, password);
       return;
     }
     this.signaling?.send('join-room', { roomCode: norm, password });

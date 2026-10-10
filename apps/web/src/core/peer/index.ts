@@ -56,6 +56,7 @@ export class PeerSession {
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private probeTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private ctlQueue: string[] = [];
   private restartCount = 0;
   private closed = false;
 
@@ -97,6 +98,9 @@ export class PeerSession {
     this.setupDataChannelHandlers();
     this.setupPeerConnectionHandlers();
     this.startStatsPoller();
+    if (this.ctlChannel.readyState === 'open') {
+      this.flushCtlQueue();
+    }
   }
 
   public get connectionState(): RTCPeerConnectionState {
@@ -119,7 +123,22 @@ export class PeerSession {
     return this.pc;
   }
 
+  private flushCtlQueue() {
+    while (this.ctlQueue.length > 0 && this.ctlChannel.readyState === 'open') {
+      const msg = this.ctlQueue.shift()!;
+      try {
+        this.ctlChannel.send(msg);
+      } catch (err) {
+        console.warn('[PeerSession] Failed to send queued ctl message:', err);
+      }
+    }
+  }
+
   private setupDataChannelHandlers() {
+    this.ctlChannel.onopen = () => {
+      this.flushCtlQueue();
+    };
+
     this.ctlChannel.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
         try {
@@ -319,15 +338,21 @@ export class PeerSession {
   }
 
   public sendCtl(message: unknown) {
+    const str = typeof message === 'string' ? message : JSON.stringify(message);
     if (this.ctlChannel.readyState === 'open') {
-      const str = typeof message === 'string' ? message : JSON.stringify(message);
       this.ctlChannel.send(str);
+    } else {
+      this.ctlQueue.push(str);
     }
   }
 
   public sendData(frame: Uint8Array) {
     if (this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(frame.buffer as ArrayBuffer);
+      const buf =
+        frame.byteOffset === 0 && frame.byteLength === frame.buffer.byteLength
+          ? frame.buffer
+          : frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
+      this.dataChannel.send(buf as ArrayBuffer);
     }
   }
 

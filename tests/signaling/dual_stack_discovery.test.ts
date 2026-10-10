@@ -148,4 +148,47 @@ describe('Phase 2 Signaling Server: Dual-Stack Local Group Discovery & Rooms', (
     groupIndex.removeDevice('dev_1');
     expect(groupIndex.getDeviceCount()).toBe(0);
   });
+
+  it('notifies visible peers when a device disconnects after grace period', async () => {
+    vi.useFakeTimers();
+    const key = deriveNetworkKey('192.168.1.50', SERVER_SALT);
+    groupIndex.registerDevice({
+      deviceId: 'dev_alice',
+      name: 'Alice',
+      platform: 'web',
+      networkKeys: new Set([key]),
+      connectedAt: Date.now(),
+      lastSeen: Date.now(),
+      heartbeatComplete: true,
+      resumeToken: 'tok_alice',
+    });
+    groupIndex.registerDevice({
+      deviceId: 'dev_bob',
+      name: 'Bob',
+      platform: 'web',
+      networkKeys: new Set([key]),
+      connectedAt: Date.now(),
+      lastSeen: Date.now(),
+      heartbeatComplete: true,
+      resumeToken: 'tok_bob',
+    });
+
+    expect(groupIndex.getVisiblePeers('dev_alice')).toHaveLength(1);
+
+    let notifiedPeers: any[] = [];
+    groupIndex.scheduleDisconnect('dev_bob', (departedPeers) => {
+      notifiedPeers = departedPeers;
+    });
+
+    expect(groupIndex.getDeviceCount()).toBe(2);
+    // Advance timers past LOCAL_GROUP_DISCONNECT_GRACE_MS (15000ms)
+    vi.advanceTimersByTime(16000);
+
+    expect(groupIndex.getDeviceCount()).toBe(1);
+    expect(notifiedPeers).toHaveLength(1);
+    expect(notifiedPeers[0].deviceId).toBe('dev_alice');
+
+    vi.useRealTimers();
+  });
 });
+

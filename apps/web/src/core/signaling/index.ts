@@ -295,6 +295,9 @@ export class SignalingLadderClient {
 
   private startHeartbeat() {
     this.stopHeartbeat();
+    if (this.connectionState === 'connected') {
+      this.send('ping', { clientTime: Date.now() });
+    }
     this.heartbeatTimer = setInterval(() => {
       if (this.connectionState !== 'connected') return;
 
@@ -304,7 +307,7 @@ export class SignalingLadderClient {
         return;
       }
 
-      this.send('ping', {});
+      this.send('ping', { clientTime: Date.now() });
     }, HEARTBEAT_INTERVAL_MS);
   }
 
