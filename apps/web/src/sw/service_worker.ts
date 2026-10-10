@@ -7,6 +7,7 @@ const CACHE_NAME = 'shareapp-v3';
 const STREAM_STREAMS = new Map<string, ReadableStreamDefaultController>();
 
 self.addEventListener('install', (event: any) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(['/'])));
   (self as any).skipWaiting();
 });
 
@@ -60,7 +61,7 @@ self.addEventListener('fetch', (event: any) => {
     event.respondWith(
       (async () => {
         const formData = await event.request.formData();
-        const files = formData.getAll('files');
+        const _files = formData.getAll('files');
         // Redirect to main app screen
         return Response.redirect('/?shared=true', 303);
       })()
@@ -69,5 +70,7 @@ self.addEventListener('fetch', (event: any) => {
   }
 
   // Default network-first or cache strategy for static assets
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  event.respondWith(
+    fetch(event.request).catch(() => caches.open(CACHE_NAME).then((c) => c.match(event.request)))
+  );
 });

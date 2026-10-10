@@ -49,6 +49,10 @@ export class TrustManager {
     return this.derivedKey;
   }
 
+  public getPeerPublicKey(): string | null {
+    return this.peerPublicKeyRaw;
+  }
+
   public async computeVerificationSAS(
     localDtlsFingerprint: string,
     remoteDtlsFingerprint: string,
@@ -101,7 +105,7 @@ export class TrustManager {
     const ct = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
       this.derivedKey,
-      frame
+      frame as unknown as BufferSource
     );
     const out = new Uint8Array(12 + ct.byteLength);
     out.set(iv, 0);
@@ -122,7 +126,7 @@ export class TrustManager {
     const pt = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },
       this.derivedKey,
-      ct
+      ct as unknown as BufferSource
     );
     return new Uint8Array(pt);
   }

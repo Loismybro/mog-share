@@ -15,7 +15,6 @@ import type {
 } from '../types';
 import { formatBytes, formatSpeed, formatTime } from '../utils/formatters';
 import { haptics } from '../haptics/index.js';
-import { DiagnosticsRunner } from '../diagnostics/index.js';
 
 // ---------------------------------------------------------------------------
 // Identity helpers
@@ -1366,7 +1365,10 @@ function DiagnosticsModal(props: {
   onClose: () => void;
   pushToast: (k: Toast['kind'], m: string) => void;
 }) {
-  const report = [
+  const [fullReport, setFullReport] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const initialReport = [
     `state: ${props.connState}`,
     `server: ${props.serverUrl}`,
     `latency: ${props.latencyMs != null ? `${props.latencyMs} ms` : 'measuring…'}`,
@@ -1377,12 +1379,36 @@ function DiagnosticsModal(props: {
     `page: ${window.location.href}`,
     `ua: ${navigator.userAgent}`,
   ].join('\n');
+
+  const handleRunFullDiagnostics = async () => {
+    setRunning(true);
+    try {
+      const runner = new DiagnosticsRunner(props.serverUrl);
+      const res = await runner.runFullDiagnostics();
+      setFullReport(runner.formatReportAsText(res));
+      props.pushToast('success', 'Diagnostics completed');
+    } catch {
+      props.pushToast('error', 'Diagnostics failed');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const displayText = fullReport || initialReport;
+
   return (
     <Modal title="Diagnostics" onClose={props.onClose}>
-      <pre className="diag mono">{report}</pre>
+      <pre className="diag mono">{displayText}</pre>
       <div className="modal-actions">
+        <button
+          className="btn btn-ghost"
+          disabled={running}
+          onClick={handleRunFullDiagnostics}
+        >
+          {running ? 'Running tests…' : 'Run 10s Deep Diagnostics'}
+        </button>
         <button className="btn btn-primary" onClick={async () => {
-          const ok = await copyText(report);
+          const ok = await copyText(displayText);
           props.pushToast(ok ? 'success' : 'error', ok ? 'Diagnostics copied' : 'Copy failed');
         }}><Copy size={14} /> Copy diagnostics</button>
       </div>

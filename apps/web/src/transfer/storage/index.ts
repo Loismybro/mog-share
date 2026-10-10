@@ -126,7 +126,7 @@ export class MemoryBlockWriter implements BlockWriter {
     for (const idx of sortedIndices) {
       parts.push(this.blocks.get(idx)!);
     }
-    return new Blob(parts, { type: this.mimeType });
+    return new Blob(parts as unknown as BlobPart[], { type: this.mimeType });
   }
 
   async abort(): Promise<void> {
@@ -221,7 +221,8 @@ export class OPFSBlockWriter implements BlockWriter {
       this.writableStream = null;
     }
     if (this.fileHandle) {
-      const file = await this.fileHandle.getFile();
+      const rawFile = await this.fileHandle.getFile();
+      const file = this.mimeType ? new File([rawFile], rawFile.name, { type: this.mimeType }) : rawFile;
       setTimeout(async () => {
         try {
           const root = await navigator.storage.getDirectory();

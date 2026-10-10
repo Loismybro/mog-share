@@ -35,6 +35,9 @@ export class EncryptedServerRelayTransport implements Transport {
     const b64 = btoa(binary);
 
     this.sendSignalFrame(b64);
+    if (this.drainCallback) {
+      this.drainCallback();
+    }
   }
 
   public async handleIncomingRelayFrame(ciphertextB64: string): Promise<void> {

@@ -69,7 +69,7 @@ export function extractIpv6Prefix64(ip: string): string {
     const emptyIndex = parts.indexOf('');
     if (emptyIndex !== -1) {
       const missing = 8 - (parts.length - 1);
-      const zeros = new Array(missing).fill('0000');
+      const zeros = Array.from({ length: missing }, () => '0000');
       parts.splice(emptyIndex, 1, ...zeros);
     }
   }

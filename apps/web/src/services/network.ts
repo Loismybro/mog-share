@@ -10,18 +10,15 @@ import {
   DEFAULT_CHUNK_SIZE,
   DEFAULT_BLOCK_SIZE,
   DEFAULT_CREDIT_WINDOW_BLOCKS,
-  BUFFERED_AMOUNT_HIGH_WATERMARK,
   ROOM_CODE_LENGTH,
   ROOM_CODE_ALPHABET,
-  createEnvelope,
   type SignalingEnvelope,
   type IceServerConfig,
 } from '@shareapp/shared';
-import { SignalingLadderClient, type TransportRung } from '../core/signaling/index.js';
+import { SignalingLadderClient } from '../core/signaling/index.js';
 import {
   probeNetwork,
   generateEphemeralDeviceId,
-  detectDeviceType,
   type ProbeResult,
 } from '../core/discovery/index.js';
 import { PeerSession, type PeerSignal, type PeerPathStats } from '../core/peer/index.js';
@@ -33,9 +30,7 @@ import { FileReceiverPipeline } from '../transfer/receiver/index.js';
 import {
   createBlockWriter,
   checkStorageQuota,
-  pickStorageStrategy,
   type BlockWriter,
-  type StorageStrategy,
 } from '../transfer/storage/index.js';
 import { TransferJournal } from '../transfer/resume/journal.js';
 import { BlockBitmap } from '../transfer/resume/bitmap.js';
@@ -342,7 +337,7 @@ export class NetworkService {
       case 'signal': {
         if (!from) return;
         const bundle = this.getOrCreatePeerBundle(from);
-        bundle.peerSession.handleRemoteSignal(payload.signal as PeerSignal);
+        bundle.peerSession.handleSignal(payload.signal as PeerSignal);
         break;
       }
 
@@ -369,13 +364,13 @@ export class NetworkService {
     void trustManager.init();
 
     const orchestrator = new ConnectionLadderOrchestrator({
-      onStatusChange: (_status, detail) => {
+      onStatusChange: (_status, _detail) => {
         // live detail
       },
       onPathBadgeChange: (badge, _pathType) => {
         const peer = this.visiblePeers.get(remoteDeviceId) || this.roomPeers.get(remoteDeviceId);
         if (peer) {
-          peer.connType = badge;
+          peer.connType = badge.toLowerCase().includes('direct') ? 'direct' : 'relay';
           this.callbacks.onPeersChanged(Array.from(this.visiblePeers.values()));
         }
       },
@@ -586,7 +581,7 @@ export class NetworkService {
           transfer.status = 'in_progress';
           this.callbacks.onTransferUpdate(transfer);
         },
-        onBlockCompleted: (blockIndex) => {
+        onBlockCompleted: (_blockIndex) => {
           // Log progression
         },
         onFileCompleted: () => {
@@ -632,11 +627,12 @@ export class NetworkService {
 
   public async respondToRequest(req: IncomingRequest, accept: boolean): Promise<void> {
     const bundle = this.getOrCreatePeerBundle(req.fromId);
+    const transferId = req.transferId || req.id || '';
 
     if (!accept) {
       bundle.peerSession.sendCtl({
         type: 'decline-transfer',
-        payload: { transferId: req.id },
+        payload: { transferId },
       });
       return;
     }
@@ -647,7 +643,7 @@ export class NetworkService {
       this.callbacks.onError(quotaCheck.error || 'Insufficient storage quota');
       bundle.peerSession.sendCtl({
         type: 'decline-transfer',
-        payload: { transferId: req.id, reason: 'E_QUOTA' },
+        payload: { transferId, reason: 'E_QUOTA' },
       });
       return;
     }
@@ -657,14 +653,18 @@ export class NetworkService {
       fileName: req.meta.name,
       fileSize: req.meta.size,
       mimeType: req.meta.type,
-      transferId: req.id,
+      transferId,
     });
-    this.activeWriters.set(req.id, writer);
+    this.activeWriters.set(transferId, writer);
 
     const transfer: TransferFile = {
-      id: req.id,
+      id: transferId,
       name: req.meta.name,
       size: req.meta.size,
+      type: req.meta.type,
+      progress: 0,
+      speedBytesPerSec: 0,
+      etaSeconds: 0,
       direction: 'receiving',
       status: 'in_progress',
       bytesTransferred: 0,
@@ -672,31 +672,33 @@ export class NetworkService {
       peerId: req.fromId,
       peerName: req.fromName,
       channel: 'direct',
+      createdAt: Date.now(),
     };
-    this.transferFiles.set(req.id, transfer);
+    this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate(transfer);
 
     const totalBlocks = Math.max(1, Math.ceil(req.meta.size / DEFAULT_BLOCK_SIZE));
     const bitmap = new BlockBitmap(totalBlocks);
-    this.transferBitmaps.set(req.id, bitmap);
+    this.transferBitmaps.set(transferId, bitmap);
 
     const receiverPipeline = new FileReceiverPipeline(
-      req.id,
+      transferId,
       req.meta.size,
       writer,
       {
         sendCtlMessage: (msg) => {
           bundle.peerSession.sendCtl(msg);
         },
-        onProgress: (verifiedBytes, totalBytes) => {
+        onProgress: (verifiedBytes, _totalBytes) => {
           transfer.bytesTransferred = verifiedBytes;
+          transfer.progress = Math.round((verifiedBytes / req.meta.size) * 100);
           transfer.status = 'in_progress';
           this.callbacks.onTransferUpdate(transfer);
         },
         onBlockVerified: (blockIndex) => {
           bitmap.markVerified(blockIndex);
           void this.journal.recordProgress({
-            transferId: req.id,
+            transferId,
             fileName: req.meta.name,
             fileSize: req.meta.size,
             lastModified: req.meta.lastModified || Date.now(),
@@ -710,37 +712,38 @@ export class NetworkService {
         },
         onFileComplete: (output) => {
           transfer.status = 'completed';
+          transfer.progress = 100;
           transfer.bytesTransferred = req.meta.size;
           if (output) {
             transfer.blobUrl = URL.createObjectURL(output);
           }
           this.callbacks.onTransferUpdate(transfer);
           haptics.play('complete');
-          this.activeReceivers.delete(req.id);
-          this.activeWriters.delete(req.id);
+          this.activeReceivers.delete(transferId);
+          this.activeWriters.delete(transferId);
         },
         onError: (err) => {
           transfer.status = 'failed';
           transfer.error = err.message;
           this.callbacks.onTransferUpdate(transfer);
           haptics.play('error');
-          this.activeReceivers.delete(req.id);
-          this.activeWriters.delete(req.id);
+          this.activeReceivers.delete(transferId);
+          this.activeWriters.delete(transferId);
         },
       },
       DEFAULT_BLOCK_SIZE
     );
 
-    this.activeReceivers.set(req.id, receiverPipeline);
+    this.activeReceivers.set(transferId, receiverPipeline);
 
     // Accept transfer and issue initial flow control credits
     bundle.peerSession.sendCtl({
       type: 'accept-transfer',
-      payload: { transferId: req.id },
+      payload: { transferId },
     });
     bundle.peerSession.sendCtl({
       type: 'credit-grant',
-      payload: { transferId: req.id, credits: DEFAULT_CREDIT_WINDOW_BLOCKS },
+      payload: { transferId, credits: DEFAULT_CREDIT_WINDOW_BLOCKS },
     });
   }
 
@@ -812,7 +815,7 @@ export class NetworkService {
 
   public broadcastClipboard(content: string) {
     const payload = { content, timestamp: Date.now() };
-    for (const [peerId, bundle] of this.peerBundles) {
+    for (const [, bundle] of this.peerBundles) {
       bundle.peerSession.sendCtl({ type: 'clipboard', payload });
     }
     // Also notify via signaling for unestablished pairs
@@ -825,6 +828,26 @@ export class NetworkService {
       type: 'clipboard',
       payload: { content: text, timestamp: Date.now() },
     });
+  }
+
+  public getCurrentRoomCode(): string | null {
+    return this.currentRoomCode;
+  }
+
+  public getRoomPassphrase(): string | null {
+    return this.roomPassphrase;
+  }
+
+  public isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
+  public getLatencyMs(): number | null {
+    return this.latencyMs;
+  }
+
+  public getState(): ConnState {
+    return this.state;
   }
 
   private setState(state: ConnState, detail?: string) {

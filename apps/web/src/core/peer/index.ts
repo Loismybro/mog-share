@@ -3,7 +3,6 @@ import {
   ICE_DISCONNECTED_GRACE_MS,
   ICE_PROBE_PONG_TIMEOUT_MS,
   STATS_POLL_INTERVAL_MS,
-  ICE_CONNECTING_MAX_MS,
 } from '@shareapp/shared';
 
 export type PathType = 'direct_lan' | 'direct_wan' | 'turn_relay' | 'server_relay';
@@ -328,8 +327,25 @@ export class PeerSession {
 
   public sendData(frame: Uint8Array) {
     if (this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(frame.buffer);
+      this.dataChannel.send(frame.buffer as ArrayBuffer);
     }
+  }
+
+  public getBufferedAmount(): number {
+    return this.dataChannel ? this.dataChannel.bufferedAmount : 0;
+  }
+
+  public waitForBufferedAmountLow(): Promise<void> {
+    if (!this.dataChannel || this.dataChannel.bufferedAmount <= (this.dataChannel.bufferedAmountLowThreshold || 256 * 1024)) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const onLow = () => {
+        this.dataChannel.removeEventListener('bufferedamountlow', onLow);
+        resolve();
+      };
+      this.dataChannel.addEventListener('bufferedamountlow', onLow);
+    });
   }
 
   private startStatsPoller() {
@@ -349,8 +365,8 @@ export class PeerSession {
         });
 
         if (selectedPair) {
-          const localCandidate = stats.get(selectedPair.localCandidateId);
-          const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+          const localCandidate = (stats as any).get(selectedPair.localCandidateId);
+          const remoteCandidate = (stats as any).get(selectedPair.remoteCandidateId);
 
           let pathType: PathType = 'direct_lan';
           let badgeLabel = 'Direct (same network)';

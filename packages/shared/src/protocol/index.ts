@@ -11,11 +11,13 @@ import { PROTOCOL_VERSION } from '../constants/index.js';
 // payload...
 // ---------------------------------------------------------------------------
 
-export enum BinaryFrameType {
-  DATA = 1,
-  BLOCK_END = 2,
-  EOF = 3,
-}
+export const BinaryFrameType = {
+  DATA: 1,
+  BLOCK_END: 2,
+  EOF: 3,
+} as const;
+
+export type BinaryFrameType = (typeof BinaryFrameType)[keyof typeof BinaryFrameType];
 
 export const BINARY_HEADER_SIZE = 17;
 

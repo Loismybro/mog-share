@@ -43,7 +43,7 @@ export async function handleTurnCredentialsRequest(
       ttl: creds.ttl,
       expiryUnix: creds.expiryUnix,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to issue TURN credentials' });
   }
 }

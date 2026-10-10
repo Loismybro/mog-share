@@ -1,6 +1,6 @@
 export type Platform = 'ios' | 'android' | 'macos' | 'windows' | 'linux' | 'web';
 
-export type ConnState = 'idle' | 'connecting' | 'ready' | 'reconnecting' | 'offline';
+export type ConnState = 'idle' | 'connecting' | 'ready' | 'reconnecting' | 'offline' | 'error' | 'disconnected';
 
 export interface Device {
   id: string;
@@ -8,6 +8,9 @@ export interface Device {
   platform: Platform;
   isLocal: boolean;
   status: 'online' | 'busy' | 'offline';
+  connType?: 'direct' | 'relay';
+  rttMs?: number;
+  availableBitrateBps?: number;
 }
 
 /** T9: real transfer lifecycle statuses. */
@@ -15,6 +18,9 @@ export type TransferStatus =
   | 'waiting'
   | 'connecting'
   | 'transferring'
+  | 'in_progress'
+  | 'pending'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'declined'
@@ -27,6 +33,7 @@ export interface FileMeta {
   type: string;
   totalChunks: number;
   sha256?: string;
+  lastModified?: number;
 }
 
 export interface TransferFile {
@@ -36,6 +43,7 @@ export interface TransferFile {
   type: string;
   progress: number; // 0..100
   speedBytesPerSec: number;
+  speed?: number;
   etaSeconds: number;
   status: TransferStatus;
   direction: 'sending' | 'receiving';
@@ -46,14 +54,20 @@ export interface TransferFile {
   blobUrl?: string;
   savedToDisk?: boolean; // T6: streamed straight to disk, no blob in memory
   createdAt: number;
+  bytesTransferred?: number;
 }
 
 export interface IncomingRequest {
+  id?: string;
   transferId: string;
   fromId: string;
   fromName: string;
+  fromPlatform?: Platform;
   meta: FileMeta;
   receivedAt: number;
+  sasNumeric?: string;
+  sasEmoji?: string;
+  isTrusted?: boolean;
 }
 
 export interface ClipboardItem {

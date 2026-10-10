@@ -1,5 +1,4 @@
 import {
-  PROTOCOL_VERSION,
   WS_CONNECT_TIMEOUT_MS,
   TRANSPORT_LADDER_REATTEMPT_MS,
   HEARTBEAT_INTERVAL_MS,
@@ -145,7 +144,7 @@ export class SignalingLadderClient {
         this.handleIncomingRaw(ev.data);
       };
 
-      this.ws.onerror = (ev) => {
+      this.ws.onerror = (_ev) => {
         if (!settled) {
           settled = true;
           clearTimeout(timeoutTimer);
@@ -192,7 +191,7 @@ export class SignalingLadderClient {
         this.handleIncomingRaw(ev.data);
       };
 
-      this.sse.onerror = (err) => {
+      this.sse.onerror = (_err) => {
         if (!settled) {
           settled = true;
           clearTimeout(timeoutTimer);
@@ -245,7 +244,7 @@ export class SignalingLadderClient {
       }
 
       this.callbacks.onMessage(envelope);
-    } catch (err: unknown) {
+    } catch {
       // Ignore or log malformed signaling frames
     }
   }
@@ -264,7 +263,7 @@ export class SignalingLadderClient {
     this.scheduleReconnect();
   }
 
-  private handleRungFailure(err: Error) {
+  private handleRungFailure(_err: Error) {
     this.cleanupTransports();
     // Step down ladder
     if (this.activeRung === 'ws') {

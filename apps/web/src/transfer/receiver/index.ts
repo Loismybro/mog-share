@@ -1,7 +1,6 @@
 import {
   DEFAULT_BLOCK_SIZE,
   MAX_BLOCK_RETRIES,
-  DEFAULT_CREDIT_WINDOW_BLOCKS,
 } from '@shareapp/shared';
 import {
   BinaryFrameType,
