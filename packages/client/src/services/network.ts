@@ -15,7 +15,7 @@ const CHUNK_SIZE = 16 * 1024; // T1: 16 KB — interoperable across browsers
 const RELAY_CHUNK_SIZE = 48 * 1024; // relay path (base64 over WS)
 const BUFFERED_LOW = 1 * 1024 * 1024; // T1 backpressure
 const BUFFERED_HIGH = 4 * 1024 * 1024;
-const ICE_TIMEOUT_MS = 8_000; // T1: fall back to relay after 8 s
+const ICE_TIMEOUT_MS = 5_000; // Fast fallback to relay so transfers never stall
 const REQUEST_TIMEOUT_MS = 60_000; // T3: sender-side request expiry
 const PROGRESS_THROTTLE_MS = 150; // T7
 const SPEED_WINDOW_MS = 2_000; // T7: rolling speed window
@@ -24,7 +24,13 @@ const HASH_CAP_BYTES = 64 * 1024 * 1024; // T2: hash files up to 64 MB
 const STREAM_THRESHOLD = 64 * 1024 * 1024; // T6: offer save-to-disk above this
 const RELAY_RECONNECT_WAIT_MS = 30_000; // F7: survive brief drops mid-relay
 
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+// Multi-tier STUN servers for reliable NAT traversal across Hotspots, 5GHz & 2.4GHz Wi-Fi
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
 try {
   const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
   if (turnUrl) {
@@ -35,6 +41,56 @@ try {
     });
   }
 } catch { /* env not available */ }
+
+/** Rapid STUN public IPv4 discovery to bridge 5GHz (IPv6) and 2.4GHz (IPv4) devices on the same router. */
+export async function detectStunPublicIp(): Promise<string | null> {
+  if (typeof RTCPeerConnection === 'undefined') return null;
+  return new Promise((resolve) => {
+    let settled = false;
+    let pc: RTCPeerConnection | null = null;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { pc?.close(); } catch {}
+        resolve(null);
+      }
+    }, 2500);
+
+    try {
+      pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc.createDataChannel('discovery');
+      pc.onicecandidate = (ev) => {
+        if (!ev.candidate || settled) return;
+        const cand = ev.candidate.candidate;
+        if (cand && cand.includes('srflx')) {
+          const parts = cand.split(' ');
+          const ip = parts[4];
+          if (ip && !ip.endsWith('.local') && !settled) {
+            settled = true;
+            clearTimeout(timer);
+            try { pc?.close(); } catch {}
+            resolve(ip);
+          }
+        }
+      };
+      pc.createOffer()
+        .then((offer) => {
+          if (!settled) return pc?.setLocalDescription(offer);
+        })
+        .catch(() => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            try { pc?.close(); } catch {}
+            resolve(null);
+          }
+        });
+    } catch {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
 
 // T6: minimal typings for the File System Access API
 interface SaveFilePickerOptions {
@@ -63,17 +119,26 @@ export function safeSet(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
 
-/** D9: stable device id — UUID in localStorage (never window.name). */
+/** Stable device id — scoped to tab session so multiple tabs on the same machine/browser can test without collision. */
 export function getPersistentDeviceId(): string {
-  const existing = safeGet('mog_device_id');
-  if (existing && /^[\w-]{8,64}$/.test(existing)) return existing;
-  const id = (crypto.randomUUID ? crypto.randomUUID() : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+  try {
+    const tabId = sessionStorage.getItem('mog_tab_device_id');
+    if (tabId && /^[\w-]{8,64}$/.test(tabId)) return tabId;
+  } catch {}
+
+  const id = crypto.randomUUID ? crypto.randomUUID() : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    sessionStorage.setItem('mog_tab_device_id', id);
+  } catch {}
   safeSet('mog_device_id', id);
   return id;
 }
 
 export function regenerateDeviceId(): string {
   const id = crypto.randomUUID ? crypto.randomUUID() : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    sessionStorage.setItem('mog_tab_device_id', id);
+  } catch {}
   safeSet('mog_device_id', id);
   return id;
 }
@@ -109,6 +174,7 @@ interface SendJob {
   requestTimer?: ReturnType<typeof setTimeout>;
   pc?: RTCPeerConnection;
   dc?: RTCDataChannel;
+  pendingIce: RTCIceCandidateInit[];
 }
 
 interface ReceiveJob {
@@ -123,6 +189,7 @@ interface ReceiveJob {
   writer?: WritableFileStream;
   writeChain: Promise<void>;
   expectedChunks: number;
+  pendingIce: RTCIceCandidateInit[];
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +214,11 @@ export class NetworkService {
   private activeUrl: string | null = null;
 
   private peers = new Map<string, Device>();
+  private tabPeers = new Map<string, Device>();
   private roomPeers = new Map<string, Device>();
   private currentRoomCode: string | null = null;
+  private stunIp: string | null = null;
+  private broadcastChannel: BroadcastChannel | null = null;
 
   // F8: optional room passphrase → AES-GCM key for relay chunks + clipboard
   private passphrase: string | null = null;
@@ -178,6 +248,7 @@ export class NetworkService {
   private pagehideHandler = () => {
     // R8: best-effort leave on tab close
     try {
+      this.broadcastChannel?.postMessage({ type: 'tab-leave', deviceId: this.deviceId });
       if (this.ws?.readyState === WebSocket.OPEN && this.currentRoomCode) {
         this.ws.send(JSON.stringify({ type: 'leave-room', payload: {} }));
       }
@@ -194,6 +265,9 @@ export class NetworkService {
     window.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('pagehide', this.pagehideHandler);
+
+    this.initBroadcastMesh();
+    void this.initStunDiscovery();
 
     // F10: measure latency every 30 s while connected
     this.pingInterval = setInterval(() => {
@@ -338,8 +412,69 @@ export class NetworkService {
     this.register();
   }
 
+  private async initStunDiscovery() {
+    try {
+      const ip = await detectStunPublicIp();
+      if (ip && !this.destroyed) {
+        this.stunIp = ip;
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.send('network-hint', { hint: ip });
+        }
+      }
+    } catch {}
+  }
+
+  private initBroadcastMesh() {
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        this.broadcastChannel = new BroadcastChannel('mogshare_local_mesh');
+        this.broadcastChannel.onmessage = (ev) => this.handleBroadcastMessage(ev.data);
+        this.broadcastLocalTab();
+      }
+    } catch {}
+  }
+
+  private broadcastLocalTab(isReply = false) {
+    try {
+      this.broadcastChannel?.postMessage({
+        type: 'tab-announce',
+        isReply,
+        device: {
+          id: this.deviceId,
+          name: this.deviceName,
+          platform: this.platform,
+          isLocal: true,
+          status: 'online',
+        },
+      });
+    } catch {}
+  }
+
+  private handleBroadcastMessage(msg: any) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'tab-announce') {
+      const dev = msg.device as Device;
+      if (dev && dev.id && dev.id !== this.deviceId) {
+        this.tabPeers.set(dev.id, dev);
+        this.emitPeers();
+        if (!msg.isReply) {
+          this.broadcastLocalTab(true);
+        }
+      }
+    } else if (msg.type === 'tab-leave') {
+      if (this.tabPeers.delete(msg.deviceId)) {
+        this.emitPeers();
+      }
+    }
+  }
+
   private register() {
-    this.send('register', { id: this.deviceId, name: this.deviceName, platform: this.platform });
+    this.send('register', {
+      id: this.deviceId,
+      name: this.deviceName,
+      platform: this.platform,
+      networkHint: this.stunIp || undefined,
+    });
   }
 
   /** D4: exponential backoff 1 s → 15 s. */
@@ -528,6 +663,29 @@ export class NetworkService {
         );
         break;
       }
+      case 'transfer-failed': {
+        const transferId = payload.transferId as string;
+        const err = (payload.error as string) || 'Recipient is offline or unreachable';
+        const job = this.sendJobs.get(transferId);
+        if (job) {
+          job.cancelled = true;
+          if (job.requestTimer) clearTimeout(job.requestTimer);
+          job.transfer.status = 'failed';
+          job.transfer.error = err;
+          this.emitTransfer(job.transfer, true);
+          this.cleanupSendJob(job, 0);
+        }
+        break;
+      }
+      case 'transfer-fallback': {
+        const transferId = payload.transferId as string;
+        const recvJob = this.receiveJobs.get(transferId);
+        if (recvJob) {
+          recvJob.transfer.channel = 'relay';
+          this.emitTransfer(recvJob.transfer, true);
+        }
+        break;
+      }
       case 'error': {
         this.cb.onError((payload.message as string) || 'Server error');
         break;
@@ -556,7 +714,10 @@ export class NetworkService {
   }
 
   private emitPeers() {
-    this.cb.onPeersChanged(Array.from(this.peers.values()));
+    const map = new Map<string, Device>();
+    for (const [id, d] of this.peers) map.set(id, d);
+    for (const [id, d] of this.tabPeers) map.set(id, d);
+    this.cb.onPeersChanged(Array.from(map.values()));
   }
 
   // -------------------------------------------------------------------------
@@ -655,7 +816,7 @@ export class NetworkService {
       peerName: peer.name,
       createdAt: Date.now(),
     };
-    const job: SendJob = { transfer, file, cancelled: false, started: false };
+    const job: SendJob = { transfer, file, cancelled: false, started: false, pendingIce: [] };
     this.sendJobs.set(transferId, job);
 
     const meta: FileMeta = {
@@ -736,6 +897,7 @@ export class NetworkService {
     } else {
       transfer.channel = 'relay';
       this.emitTransfer(transfer, true);
+      this.send('transfer-fallback', { targetId: transfer.peerId, transferId: transfer.id });
       await this.sendViaRelay(job);
     }
   }
@@ -806,6 +968,7 @@ export class NetworkService {
           pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         } catch { return; }
         job.pc = pc;
+        if (!job.pendingIce) job.pendingIce = [];
         pc.onicecandidate = (ev) => {
           if (ev.candidate) {
             this.send('signal', {
@@ -825,6 +988,12 @@ export class NetworkService {
       }
       try {
         await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
+        if (job.pendingIce && job.pendingIce.length > 0) {
+          const pending = job.pendingIce.splice(0);
+          for (const c of pending) {
+            try { await pc.addIceCandidate(c); } catch {}
+          }
+        }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         this.send('signal', {
@@ -835,11 +1004,26 @@ export class NetworkService {
     } else if (kind === 'answer') {
       const job = this.sendJobs.get(transferId);
       if (!job?.pc) return;
-      try { await job.pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit); } catch { /* noop */ }
+      try {
+        await job.pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
+        if (job.pendingIce && job.pendingIce.length > 0) {
+          const pending = job.pendingIce.splice(0);
+          for (const c of pending) {
+            try { await job.pc.addIceCandidate(c); } catch {}
+          }
+        }
+      } catch { /* noop */ }
     } else if (kind === 'ice') {
       const job = this.sendJobs.get(transferId) || this.receiveJobs.get(transferId);
-      if (!job?.pc) return;
-      try { await job.pc.addIceCandidate(data.candidate as RTCIceCandidateInit); } catch { /* noop */ }
+      if (!job) return;
+      const cand = data.candidate as RTCIceCandidateInit;
+      if (!cand) return;
+      if (job.pc && job.pc.remoteDescription) {
+        try { await job.pc.addIceCandidate(cand); } catch {}
+      } else {
+        if (!job.pendingIce) job.pendingIce = [];
+        job.pendingIce.push(cand);
+      }
     }
   }
 
@@ -867,8 +1051,13 @@ export class NetworkService {
         }
 
         const slice = file.slice(i * CHUNK_SIZE, Math.min(file.size, (i + 1) * CHUNK_SIZE));
-        const buf = await slice.arrayBuffer(); // T7: no base64
-        dc.send(buf);
+        const buf = await slice.arrayBuffer(); // ArrayBuffer
+        // Frame with 4-byte chunk index prefix
+        const framed = new Uint8Array(4 + buf.byteLength);
+        new DataView(framed.buffer).setUint32(0, i);
+        framed.set(new Uint8Array(buf), 4);
+
+        dc.send(framed.buffer);
         sent += buf.byteLength;
         this.trackProgress(transfer, sent);
       }
@@ -885,6 +1074,7 @@ export class NetworkService {
         transfer.channel = 'relay';
         transfer.progress = 0;
         this.emitTransfer(transfer, true);
+        this.send('transfer-fallback', { targetId: transfer.peerId, transferId: transfer.id });
         await this.sendViaRelay(job);
       }
     }
@@ -988,6 +1178,7 @@ export class NetworkService {
       cancelled: false,
       writeChain: Promise.resolve(),
       expectedChunks: 0,
+      pendingIce: [],
     };
     this.receiveJobs.set(request.transferId, job);
     this.emitTransfer(transfer, true);
@@ -1017,7 +1208,7 @@ export class NetworkService {
     this.send('transfer-response', { targetId: request.fromId, transferId: request.transferId, accepted: true });
   }
 
-  private handleChannelMessage(job: ReceiveJob, data: unknown) {
+  private async handleChannelMessage(job: ReceiveJob, data: unknown) {
     if (job.cancelled) return;
     if (typeof data === 'string') {
       try {
@@ -1025,24 +1216,51 @@ export class NetworkService {
         if (msg.kind === 'meta') {
           job.meta = { ...job.meta, name: msg.name, size: msg.size, type: msg.type, totalChunks: msg.totalChunks };
           job.expectedChunks = msg.totalChunks;
-          if (!job.writer) job.chunks = new Array(msg.totalChunks).fill(null);
+          if (!job.writer) {
+            const old = job.chunks;
+            job.chunks = new Array(msg.totalChunks).fill(null);
+            for (let k = 0; k < Math.min(old.length, msg.totalChunks); k++) {
+              if (old[k] != null) job.chunks[k] = old[k];
+            }
+          }
         } else if (msg.kind === 'done') {
           void this.finalizeReceive(job);
         }
       } catch { /* ignore */ }
       return;
     }
-    const buf = data as ArrayBuffer;
-    if (job.writer) {
-      // T6: stream sequential chunks straight to disk
-      job.writeChain = job.writeChain.then(() => job.writer!.write(buf)).catch(() => undefined);
+    let rawBuf: ArrayBuffer;
+    if (data instanceof ArrayBuffer) {
+      rawBuf = data;
+    } else if (typeof Blob !== 'undefined' && data instanceof Blob) {
+      rawBuf = await data.arrayBuffer();
     } else {
-      job.chunks[job.receivedCount] = buf;
+      return;
     }
-    job.receivedCount += 1;
-    job.receivedBytes += buf.byteLength;
-    job.transfer.status = 'transferring';
-    this.trackProgress(job.transfer, job.receivedBytes);
+    if (rawBuf.byteLength >= 4) {
+      const chunkIndex = new DataView(rawBuf, 0, 4).getUint32(0);
+      const chunkPayload = rawBuf.slice(4);
+      if (job.writer) {
+        // T6: stream sequential chunks straight to disk
+        job.writeChain = job.writeChain.then(() => job.writer!.write(chunkPayload)).catch(() => undefined);
+      } else {
+        if (job.expectedChunks > 0 && job.chunks.length !== job.expectedChunks) {
+          const old = job.chunks;
+          job.chunks = new Array(job.expectedChunks).fill(null);
+          for (let k = 0; k < Math.min(old.length, job.expectedChunks); k++) {
+            if (old[k] != null) job.chunks[k] = old[k];
+          }
+        }
+        if (job.chunks[chunkIndex] == null) {
+          job.chunks[chunkIndex] = chunkPayload;
+          job.receivedCount += 1;
+          job.receivedBytes += chunkPayload.byteLength;
+        }
+      }
+      job.transfer.channel = 'direct';
+      job.transfer.status = 'transferring';
+      this.trackProgress(job.transfer, job.receivedBytes);
+    }
   }
 
   private async handleRelayChunk(payload: Record<string, unknown>) {
@@ -1053,7 +1271,13 @@ export class NetworkService {
     const totalChunks = payload.totalChunks as number;
     if (job.expectedChunks !== totalChunks) {
       job.expectedChunks = totalChunks;
-      if (!job.writer) job.chunks = new Array(totalChunks).fill(null);
+      if (!job.writer) {
+        const old = job.chunks;
+        job.chunks = new Array(totalChunks).fill(null);
+        for (let k = 0; k < Math.min(old.length, totalChunks); k++) {
+          if (old[k] != null) job.chunks[k] = old[k];
+        }
+      }
     }
 
     let buf = base64ToArrayBuffer(payload.data as string);
@@ -1262,6 +1486,11 @@ export class NetworkService {
     window.removeEventListener('visibilitychange', this.visibilityHandler);
     window.removeEventListener('online', this.onlineHandler);
     window.removeEventListener('pagehide', this.pagehideHandler);
+    try {
+      this.broadcastChannel?.postMessage({ type: 'tab-leave', deviceId: this.deviceId });
+      this.broadcastChannel?.close();
+    } catch {}
+    this.broadcastChannel = null;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.pingInterval) clearInterval(this.pingInterval);
     if (this.currentRoomCode) this.send('leave-room', {});

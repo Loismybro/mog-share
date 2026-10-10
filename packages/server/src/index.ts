@@ -6,7 +6,15 @@ import os from 'os';
 import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
-import { computeNetworkKey, extractClientIp, normalizeRoomCode, generateRoomCode, checkJoinRate, type RateState } from './lib';
+import {
+  computeNetworkKey,
+  areDevicesOnSameNetwork,
+  extractClientIp,
+  normalizeRoomCode,
+  generateRoomCode,
+  checkJoinRate,
+  type RateState,
+} from './lib';
 
 // ---------------------------------------------------------------------------
 // App / HTTP setup (Phase 4 hardening)
@@ -53,7 +61,8 @@ interface DeviceInfo {
   name: string;
   platform: Platform;
   clientIp: string;
-  networkKey: string; // D1: public-IP based grouping key
+  networkKey: string; // D1: public-IP or LAN grouping key
+  networkHint?: string; // STUN public IP or local subnet hint
   roomCode?: string;
   joinedAt: number;
 }
@@ -89,10 +98,6 @@ const ROOM_IDLE_TTL_MS = 30 * 60 * 1000; // R5: 30 min
 // Helpers
 // ---------------------------------------------------------------------------
 
-
-
-
-
 /** Phase 4: bounded-string message validation (zod-lite, zero deps). */
 function cleanName(raw: unknown): string {
   const s = typeof raw === 'string' ? raw.trim() : '';
@@ -125,11 +130,11 @@ function publicDevice(info: DeviceInfo) {
   };
 }
 
-/** D1: notify ONLY sessions sharing the same networkKey. */
-function broadcastToNetwork(networkKey: string, exceptId: string, type: string, payload: unknown) {
+/** D1: notify ONLY sessions sharing the same network group (LAN, Hotspots, 5GHz/2.4GHz). */
+function broadcastToNetwork(sourceInfo: DeviceInfo, exceptId: string, type: string, payload: unknown) {
   for (const [id, sess] of deviceSessions) {
     if (id === exceptId) continue;
-    if (sess.info.networkKey !== networkKey) continue;
+    if (!areDevicesOnSameNetwork(sourceInfo, sess.info)) continue;
     send(sess.ws, type, payload);
   }
 }
@@ -271,6 +276,7 @@ wss.on('connection', (ws: WebSocket, req) => {
 
         wsToDeviceId.set(ws, deviceId);
 
+        const networkHint = typeof payload.networkHint === 'string' ? payload.networkHint.trim().slice(0, 64) : undefined;
         let session = deviceSessions.get(deviceId);
         if (session) {
           if (session.disconnectTimer) {
@@ -282,6 +288,7 @@ wss.on('connection', (ws: WebSocket, req) => {
           session.info.platform = cleanPlatform(payload.platform ?? session.info.platform);
           session.info.clientIp = clientIp;
           session.info.networkKey = networkKey;
+          if (networkHint) session.info.networkHint = networkHint;
 
           // Restore room membership after reconnect
           if (session.info.roomCode) {
@@ -306,6 +313,7 @@ wss.on('connection', (ws: WebSocket, req) => {
               platform: cleanPlatform(payload.platform),
               clientIp,
               networkKey,
+              networkHint,
               joinedAt: Date.now(),
             },
           };
@@ -316,16 +324,38 @@ wss.on('connection', (ws: WebSocket, req) => {
         const snapshot = [];
         for (const [id, s] of deviceSessions) {
           if (id === deviceId) continue;
-          if (s.info.networkKey !== networkKey) continue;
+          if (!areDevicesOnSameNetwork(session.info, s.info)) continue;
           if (!s.ws || s.ws.readyState !== WebSocket.OPEN) continue;
           snapshot.push(publicDevice(s.info));
         }
-        send(ws, 'peers-snapshot', { peers: snapshot });
+        send(ws, 'peers-snapshot', { peers: snapshot, networkKey: session.info.networkKey });
 
         // ...and tell the rest of the group about this device only.
-        broadcastToNetwork(networkKey, deviceId, 'device-discovered', {
+        broadcastToNetwork(session.info, deviceId, 'device-discovered', {
           device: publicDevice(session.info),
         });
+        break;
+      }
+
+      case 'network-hint': {
+        const deviceId = wsToDeviceId.get(ws);
+        const session = deviceId ? deviceSessions.get(deviceId) : null;
+        if (!session) return;
+        const hint = typeof payload.hint === 'string' ? payload.hint.trim().slice(0, 64) : '';
+        if (hint && hint !== session.info.networkHint) {
+          session.info.networkHint = hint;
+          const snapshot = [];
+          for (const [id, s] of deviceSessions) {
+            if (id === deviceId) continue;
+            if (!areDevicesOnSameNetwork(session.info, s.info)) continue;
+            if (!s.ws || s.ws.readyState !== WebSocket.OPEN) continue;
+            snapshot.push(publicDevice(s.info));
+          }
+          send(ws, 'peers-snapshot', { peers: snapshot, networkKey: session.info.networkKey });
+          broadcastToNetwork(session.info, deviceId, 'device-discovered', {
+            device: publicDevice(session.info),
+          });
+        }
         break;
       }
 
@@ -434,7 +464,7 @@ wss.on('connection', (ws: WebSocket, req) => {
           broadcastToRoom(room, session.info.id, 'clipboard-received', out);
         } else {
           // D1: local branch is scoped to the same network group only
-          broadcastToNetwork(session.info.networkKey, session.info.id, 'clipboard-received', out);
+          broadcastToNetwork(session.info, session.info.id, 'clipboard-received', out);
         }
         break;
       }
@@ -445,13 +475,22 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'file-chunk':
       case 'transfer-complete':
       case 'transfer-cancel':
+      case 'transfer-fallback':
       case 'direct-message': {
         const fromId = wsToDeviceId.get(ws);
         const targetId = cleanId(payload.targetId);
         if (!fromId || !targetId) return;
         const fromSession = deviceSessions.get(fromId);
         const target = deviceSessions.get(targetId);
-        if (!fromSession || !target) return;
+        if (!fromSession || !target || !target.ws || target.ws.readyState !== WebSocket.OPEN) {
+          if (type === 'transfer-request' || type === 'file-chunk') {
+            send(ws, 'transfer-failed', {
+              transferId: payload.transferId,
+              error: 'Recipient is unavailable or disconnected',
+            });
+          }
+          return;
+        }
         // Keep room activity fresh during transfers
         if (fromSession.info.roomCode) {
           const room = rooms.get(fromSession.info.roomCode);
@@ -481,7 +520,7 @@ wss.on('connection', (ws: WebSocket, req) => {
       leaveRoom(s);
       deviceSessions.delete(deviceId);
       // D1: departure only notifies the same network group
-      broadcastToNetwork(s.info.networkKey, deviceId, 'device-departed', { deviceId });
+      broadcastToNetwork(s.info, deviceId, 'device-departed', { deviceId });
     }, 60_000);
   });
 
@@ -500,6 +539,19 @@ app.get('/api/health', (_req, res) => {
     devices: deviceSessions.size,
     rooms: rooms.size,
   });
+});
+
+app.get('/api/debug-devices', (_req, res) => {
+  const devs = Array.from(deviceSessions.values()).map((s) => ({
+    id: s.info.id,
+    name: s.info.name,
+    platform: s.info.platform,
+    clientIp: s.info.clientIp,
+    networkKey: s.info.networkKey,
+    networkHint: s.info.networkHint,
+    wsOpen: s.ws?.readyState === WebSocket.OPEN,
+  }));
+  res.json({ count: devs.length, devices: devs });
 });
 
 // R6: LAN info so clients can build QR links that work from phones
@@ -543,6 +595,10 @@ if (fs.existsSync(clientDistPath)) {
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`[mog-share] Server listening on :${PORT} (ws path /ws)`);
-});
+export { app, server, wss };
+
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`[mog-share] Server listening on :${PORT} (ws path /ws)`);
+  });
+}

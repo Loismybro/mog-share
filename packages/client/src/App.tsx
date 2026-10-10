@@ -15,15 +15,20 @@ import type {
 import { formatBytes, formatSpeed, formatTime } from './utils/formatters';
 
 // ---------------------------------------------------------------------------
-// Identity helpers (D9)
+// Identity helpers
 // ---------------------------------------------------------------------------
-const ADJECTIVES = ['Swift', 'Calm', 'Brave', 'Quiet', 'Lucky', 'Bright', 'Gentle', 'Bold', 'Clever', 'Happy', 'Steady', 'Nimble'];
-const ANIMALS = ['Falcon', 'Otter', 'Lynx', 'Panda', 'Heron', 'Fox', 'Dolphin', 'Badger', 'Raven', 'Koala', 'Tiger', 'Owl'];
-
-function generateFriendlyName(): string {
-  const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const b = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-  return `${a} ${b}`;
+function generateDeviceName(plat?: Platform): string {
+  const p = plat || detectPlatform();
+  const hex = Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
+  const tag = hex.slice(0, 2);
+  switch (p) {
+    case 'ios': return `iPhone (${tag})`;
+    case 'android': return `Android (${tag})`;
+    case 'macos': return `MacBook (${tag})`;
+    case 'windows': return `Windows PC (${tag})`;
+    case 'linux': return `Linux PC (${tag})`;
+    default: return `Device (${tag})`;
+  }
 }
 
 function detectPlatform(): Platform {
@@ -143,9 +148,9 @@ type Theme = 'auto' | 'dark' | 'light';
 // App
 // ---------------------------------------------------------------------------
 export default function App() {
-  // Identity (guarded storage — D9)
-  const [deviceName, setDeviceName] = useState<string>(() => safeGet('mog_device_name') || generateFriendlyName());
   const platform = useMemo(detectPlatform, []);
+  // Identity (guarded storage)
+  const [deviceName, setDeviceName] = useState<string>(() => safeGet('mog_device_name') || generateDeviceName(platform));
 
   const [connState, setConnState] = useState<ConnState>('connecting');
   const [connDetail, setConnDetail] = useState<string | undefined>();
@@ -177,14 +182,20 @@ export default function App() {
   const [autoAccept, setAutoAccept] = useState<string[]>(() => {
     try { return JSON.parse(safeGet('mog_auto_accept') || '[]'); } catch { return []; }
   });
+  const [autoAcceptNearby, setAutoAcceptNearby] = useState<boolean>(() => {
+    return safeGet('mog_auto_accept_nearby') !== 'false';
+  });
 
   const netRef = useRef<NetworkService | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toastId = useRef(0);
   const wakeLockRef = useRef<{ release(): Promise<void> } | null>(null);
   const autoAcceptRef = useRef(autoAccept);
+  const autoAcceptNearbyRef = useRef(autoAcceptNearby);
   const historyRecorded = useRef(new Set<string>());
+  const saveTransferRef = useRef<(t: TransferFile) => void>(() => {});
   autoAcceptRef.current = autoAccept;
+  autoAcceptNearbyRef.current = autoAcceptNearby;
 
   const pushToast = useCallback((kind: Toast['kind'], message: string) => {
     const id = ++toastId.current;
@@ -213,8 +224,8 @@ export default function App() {
       onRoomPeers: setRoomPeers,
       onRoomError: (msg) => { setRoomBusy(null); setRoomError(msg); setRoomCode(null); setRoomPeers([]); },
       onIncomingRequest: (req) => {
-        // F6: trusted devices auto-accept
-        if (autoAcceptRef.current.includes(req.fromId)) {
+        // Auto-accept if autoAcceptNearby is active OR device is trusted
+        if (autoAcceptNearbyRef.current || autoAcceptRef.current.includes(req.fromId)) {
           netRef.current?.respondToRequest(req, true);
           return;
         }
@@ -227,6 +238,10 @@ export default function App() {
           next.set(t.id, t);
           return next;
         });
+        if (t.status === 'completed' && t.direction === 'receiving' && t.blobUrl && autoAcceptNearbyRef.current && !historyRecorded.current.has(t.id + '_autosaved')) {
+          historyRecorded.current.add(t.id + '_autosaved');
+          saveTransferRef.current(t);
+        }
         // F7: persist terminal states to IndexedDB history
         const terminal = ['completed', 'failed', 'declined', 'expired', 'cancelled'];
         if (terminal.includes(t.status) && !historyRecorded.current.has(t.id)) {
@@ -317,7 +332,7 @@ export default function App() {
   // Actions
   // -------------------------------------------------------------------------
   const saveName = (name: string) => {
-    const clean = name.trim().slice(0, 40) || generateFriendlyName();
+    const clean = name.trim().slice(0, 40) || generateDeviceName(platform);
     setDeviceName(clean);
     safeSet('mog_device_name', clean);
     netRef.current?.updateProfile(clean, platform);
@@ -386,6 +401,7 @@ export default function App() {
     a.click();
     document.body.removeChild(a);
   };
+  saveTransferRef.current = saveTransfer;
 
   // F3: download all completed receives as one ZIP
   const saveAllAsZip = async (list: TransferFile[]) => {
@@ -474,8 +490,8 @@ export default function App() {
       {/* Slim top bar */}
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden>⚡</span>
-          <span className="brand-name">Mog Share</span>
+          <span className="brand-mark" aria-hidden><Share2 size={20} /></span>
+          <span className="brand-name">MogShare</span>
         </div>
         <div className="topbar-actions">
           <button
@@ -514,6 +530,12 @@ export default function App() {
             onMessage={(peer) => setMessagePeer(peer)}
             deviceName={deviceName}
             onRename={() => setRenaming(true)}
+            autoAcceptNearby={autoAcceptNearby}
+            onToggleAutoAccept={() => {
+              const next = !autoAcceptNearby;
+              setAutoAcceptNearby(next);
+              safeSet('mog_auto_accept_nearby', next ? 'true' : 'false');
+            }}
           />
         )}
         {tab === 'room' && (
@@ -614,12 +636,14 @@ export default function App() {
           publicUrl={publicUrl}
           theme={theme}
           autoAcceptCount={autoAccept.length}
+          autoAcceptNearby={autoAcceptNearby}
           onClose={() => setShowSettings(false)}
-          onSave={(name, server, pub, th) => {
+          onSave={(name, server, pub, th, autoNearby) => {
             saveName(name);
             setServerUrl(server); safeSet('mog_server_url', server);
             setPublicUrl(pub); safeSet('mog_public_url', pub);
             setTheme(th);
+            setAutoAcceptNearby(autoNearby); safeSet('mog_auto_accept_nearby', autoNearby ? 'true' : 'false');
             netRef.current?.setCustomServerUrl(server || null);
             setShowSettings(false);
           }}
@@ -641,6 +665,7 @@ export default function App() {
       {renaming && (
         <RenameModal
           current={deviceName}
+          platform={platform}
           onClose={() => setRenaming(false)}
           onSave={(n) => { saveName(n); setRenaming(false); }}
         />
@@ -685,6 +710,8 @@ function NearbyView(props: {
   onMessage: (peer: Device) => void;
   deviceName: string;
   onRename: () => void;
+  autoAcceptNearby: boolean;
+  onToggleAutoAccept: () => void;
 }) {
   const { peers, selectedFiles } = props;
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -700,20 +727,29 @@ function NearbyView(props: {
     <div className="view">
       <h1 className="view-title">Nearby devices</h1>
       <p className="view-sub">Devices on the same network appear automatically. Drop files or whole folders onto a device.</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '4px 0 14px 0' }}>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={props.onToggleAutoAccept}
+          style={{ fontSize: '12.5px', padding: '4px 14px', borderRadius: '999px', background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' }}
+        >
+          {props.autoAcceptNearby ? '⚡ Auto-accept: ON (AirDrop mode)' : 'Auto-accept: OFF (ask each time)'}
+        </button>
+      </div>
 
       {peers.length === 0 ? (
         <div className="empty-state">
           <div className="pulse-ring" aria-hidden><Wifi size={28} /></div>
           <p className="empty-title">
-            {props.connState === 'ready' ? 'Looking for devices…' : 'Connecting…'}
+            {props.connState === 'ready' ? 'Scanning network for nearby devices…' : 'Connecting to network…'}
           </p>
           {props.showChecklist && (
             <div className="checklist card">
               <p className="checklist-title">Can't see a device?</p>
               <ul>
-                <li>Both devices on the same Wi‑Fi?</li>
-                <li>VPN switched off on both?</li>
-                <li>Guest Wi‑Fi or AP isolation can block discovery.</li>
+                <li>Both devices connected to same Wi‑Fi or mobile hotspot (2.4GHz / 5GHz)?</li>
+                <li>VPN switched off on both devices?</li>
+                <li>If AP isolation or guest Wi‑Fi is active, connect with a Room Code.</li>
               </ul>
               <button className="btn btn-primary" onClick={props.onGoRoom}>
                 Connect with a code instead
@@ -770,7 +806,7 @@ function NearbyView(props: {
               <strong>{selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''}</strong>
               <span className="muted mono">{formatBytes(totalSize)}</span>
             </div>
-            <span className="muted">{peers.length ? 'Tap a device to send' : 'Waiting for a device…'}</span>
+            <span className="muted">{peers.length ? 'Tap a device to send' : 'Scanning network for nearby devices…'}</span>
             <button className="icon-btn subtle" onClick={props.onClearSelected} aria-label="Clear selected files">
               <X size={18} />
             </button>
@@ -1107,7 +1143,7 @@ function TransferSheet(props: {
                 <span className="transfer-badges">
                   {t.channel && (
                     <span className={`badge ${t.channel === 'direct' ? 'badge-success' : 'badge-neutral'}`}>
-                      {t.channel === 'direct' ? 'Direct' : 'Relayed (slower)'}
+                      {t.channel === 'direct' ? 'Direct P2P' : 'Relayed'}
                     </span>
                   )}
                   <span className={`badge badge-${t.status}`}>{statusLabel(t)}</span>
@@ -1132,7 +1168,7 @@ function TransferSheet(props: {
                   <button className="btn btn-primary btn-sm" onClick={() => props.onSave(t)}><Download size={14} /> Save</button>
                 )}
                 {t.status === 'completed' && t.savedToDisk && (
-                  <span className="muted small">Already saved via file picker</span>
+                  <span className="muted small">Saved to disk</span>
                 )}
                 {(t.status === 'transferring' || t.status === 'connecting' || t.status === 'waiting') && (
                   <button className="btn btn-danger-ghost btn-sm" onClick={() => props.onCancel(t.id)}><X size={14} /> Cancel</button>
@@ -1159,10 +1195,10 @@ function TransferSheet(props: {
 
 function statusLabel(t: TransferFile): string {
   switch (t.status) {
-    case 'waiting': return 'Waiting';
-    case 'connecting': return 'Connecting';
+    case 'waiting': return 'Waiting for approval…';
+    case 'connecting': return 'Connecting P2P…';
     case 'transferring': return `${Math.round(t.progress)}%`;
-    case 'completed': return 'Done';
+    case 'completed': return 'Completed';
     case 'failed': return 'Failed';
     case 'declined': return 'Declined';
     case 'expired': return 'No answer';
@@ -1253,18 +1289,32 @@ function SettingsModal(props: {
   publicUrl: string;
   theme: Theme;
   autoAcceptCount: number;
+  autoAcceptNearby: boolean;
   onClose: () => void;
-  onSave: (name: string, serverUrl: string, publicUrl: string, theme: Theme) => void;
+  onSave: (name: string, serverUrl: string, publicUrl: string, theme: Theme, autoAcceptNearby: boolean) => void;
   onClearTrusted: () => void;
 }) {
   const [name, setName] = useState(props.deviceName);
   const [server, setServer] = useState(props.serverUrl);
   const [pub, setPub] = useState(props.publicUrl);
   const [th, setTh] = useState<Theme>(props.theme);
+  const [autoNearby, setAutoNearby] = useState(props.autoAcceptNearby);
   return (
     <Modal title="Settings" onClose={props.onClose}>
       <label className="field-label" htmlFor="set-name">Device name</label>
       <input id="set-name" className="input" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
+
+      <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '14px', marginBottom: '4px' }}>
+        <input
+          type="checkbox"
+          checked={autoNearby}
+          onChange={(e) => setAutoNearby(e.target.checked)}
+        />
+        <span style={{ fontWeight: 500 }}>Auto-accept nearby transfers</span>
+      </label>
+      <p className="muted small" style={{ marginTop: 0, marginBottom: '14px' }}>
+        Instantly accept incoming files without confirmation when on the same network (AirDrop / QuickShare style).
+      </p>
 
       <label className="field-label">Theme</label>
       <div className="seg-row" role="radiogroup" aria-label="Theme">
@@ -1295,7 +1345,7 @@ function SettingsModal(props: {
       )}
 
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={() => props.onSave(name, server.trim(), pub.trim(), th)}>Save</button>
+        <button className="btn btn-primary" onClick={() => props.onSave(name, server.trim(), pub.trim(), th, autoNearby)}>Save</button>
       </div>
     </Modal>
   );
@@ -1335,13 +1385,13 @@ function DiagnosticsModal(props: {
   );
 }
 
-function RenameModal(props: { current: string; onClose: () => void; onSave: (name: string) => void }) {
+function RenameModal(props: { current: string; platform: Platform; onClose: () => void; onSave: (name: string) => void }) {
   const [name, setName] = useState(props.current);
   return (
     <Modal title="Rename this device" onClose={props.onClose}>
       <input className="input" value={name} maxLength={40} autoFocus onChange={(e) => setName(e.target.value)} />
       <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={() => setName(generateFriendlyName())}>Randomize</button>
+        <button className="btn btn-ghost" onClick={() => setName(generateDeviceName(props.platform))}>Reset</button>
         <button className="btn btn-primary" onClick={() => props.onSave(name)}>Save</button>
       </div>
     </Modal>
