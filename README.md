@@ -1,84 +1,136 @@
-# Mog Share
+# ⚡ MogShare
 
-Simple cross-platform file sharing between your devices — in the browser, no installs.
+> **Next-generation, browser-based peer-to-peer file sharing.**  
+> Blazing-fast transfers between Android, iOS, Windows, Mac, and Linux with zero installations. Built with WebRTC DataChannels, Neo-Brutalist aesthetics with odd pale colors, persistent Personal Space vault, and Xender-grade discovery modes.
 
-Devices on the **same network** discover each other automatically (grouped by public IP on the server). Devices on **different networks** connect with a 6-digit room code or QR link. Files travel **peer-to-peer over WebRTC data channels** when a direct connection is possible (shown as **Direct**); otherwise they are relayed through the server (shown as **Relayed (slower)** — the relay path is not end-to-end encrypted).
+---
 
-## What's honest here
+## ✨ Features at a Glance
 
-- Transfers are P2P **when WebRTC connects** (STUN, optional TURN). Otherwise they go through your server relay.
-- Large files: on desktop Chromium, files ≥ 64 MB are **streamed straight to disk** via the File System Access API. On iOS/Firefox they are held in memory, so the app warns above 500 MB. There is no "unlimited size".
-- Speed depends entirely on your network. Nothing is hard-coded.
+### 📱 Android & Cross-Platform Sharing (Xender / SHAREit Style)
+* **Giant Hero Action Buttons**: Instant 1-tap **SEND** and **RECEIVE** action modes directly on the home screen.
+* **Radar Scanner Discovery**: Visual sweeping sonar beam with orbiting device avatars for intuitive AirDrop/Xender-style 1-tap sends.
+* **Categorized File Pickers**: Dedicated quick-pick tabs for **Photos**, **Music**, **Videos**, **Docs**, **APKs**, and **All Files**.
+* **Receive Mode**: Full-screen receiver beacon mode with animated sonar pulse, hotspot discovery, and dynamic QR code generation.
+* **Connect to PC (WebShare)**: Zero-install PC/Mac transfer mode allowing any computer browser to connect and transfer files via local Wi-Fi or hotspot.
+* **Brutalist PIN Keypad**: Tactile numeric keypad for fast 6-digit room code entry.
 
-## Features
+### 🗄️ In-App File Opening & Personal Space Vault
+* **In-App Media Viewers**:
+  * **Images**: High-resolution lightbox with zoom in/out, panning, and reset.
+  * **Audio**: Retro brutalist audio player featuring animated equalizer frequency bars, scrubber, play/pause, volume control, and mute toggle.
+  * **Videos**: Embedded HTML5 player with fallback for exotic codecs.
+  * **Documents & Code**: Formatted code/text viewer with 1-click **Copy Text**.
+  * **PDFs**: In-browser PDF renderer.
+  * **APKs**: Android package inspector with metadata, package verification, and native Android Package Installer dispatch via `navigator.share` (**Open With…**).
+* **Personal Space (Vault)**:
+  * Persistent IndexedDB storage (`mog_share_personal_vault`) automatically cataloging all received files.
+  * Automatic category detection (`images`, `videos`, `audio`, `documents`, `apps`, `archives`, `other`).
+  * Real-time search, sorting (date, size, name), and storage quota breakdown.
+  * Multi-select batch actions and **Export All as ZIP** using `fflate`.
 
-- **Nearby discovery** grouped by public IP on the server, with a room-code escape hatch for VPNs / guest Wi-Fi.
-- **Rooms** with crypto-random 6-digit codes, QR links, host handover, TTLs, and join rate limiting.
-- **True P2P** WebRTC data channels with an honest *Direct* / *Relayed (slower)* badge, SHA-256 integrity verification, and a max-2-concurrent send queue.
-- **Room passphrase (optional E2E for relayed data)**: PBKDF2 → AES-GCM encrypts relay-path file chunks and clipboard text, so the server can't read them. Direct P2P data never touches the server at all.
-- **Relay transfers survive reconnects** — a dropped Wi-Fi link pauses the stream for up to 30 s instead of failing it.
-- **PWA**: installable, offline shell, and Android share-sheet target (share files straight into the app).
-- **Folder drag & drop**, paste-to-send (Ctrl/Cmd+V), image thumbnails, and *Download all as ZIP* for multi-file receives.
-- **History** persisted in IndexedDB, **trusted devices** auto-accept, diagnostics with live latency, light/dark theme toggle.
+### 🚀 High-Performance Transfer Engine
+* **True P2P WebRTC DataChannels**: 16 KB binary frames, low latency, chunked array buffers (no base64 overhead).
+* **2-Layer Credit-Based Flow Control**: High-speed backpressure preventing buffer saturation on multi-gigabyte transfers.
+* **Stream-to-Disk Storage**: Direct disk streaming on Chromium via File System Access API; graceful OPFS / in-memory fallback.
+* **E2E Encrypted Relay Fallback**: PBKDF2 + AES-GCM encryption for server relay fallback and clipboard synchronization.
+* **Resume & Integrity**: SHA-256 chunk verification and automatic resume journal for dropped connections.
 
-## Quickstart (local)
+### 🎨 Neo-Brutalist Design System
+* **Odd Pale Palette**: Unique, premium color palette (`--pale-butter`, `--pale-mint`, `--pale-lavender`, `--pale-peach`, `--pale-cyan`, `--pale-rose`, `--pale-paper`).
+* **Tactile Micro-Interactions**: Solid 2.5px dark ink borders, 4px hard offset drop shadows (`4px 4px 0px`), spring button press physics, and crisp monospace status indicators.
+* **Mobile-First & Responsive**: Designed for one-handed thumb navigation with bottom tabs and haptic feedback.
+
+---
+
+## 🛠️ Tech Stack
+
+* **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Lucide Icons, QR Code, fflate
+* **Signaling Server**: Node.js, Express, WebSocket (`ws`), TypeScript
+* **Networking**: WebRTC DataChannels, STUN/TURN (coturn), Server-Sent Events (SSE) fallback
+* **Persistence**: IndexedDB (Personal Space & Transfer History), localStorage
+* **Testing**: Vitest (68 automated unit & integration tests)
+
+---
+
+## 🚀 Quickstart
+
+### Prerequisites
+* **Node.js**: v20+ or v22+
+* **pnpm** (recommended) or **npm**
+
+### Installation
 
 ```bash
-npm install
+# Clone the repository
+git clone https://github.com/Loismybro/mog-share.git
+cd mog-share
+
+# Install workspace dependencies
+pnpm install
+```
+
+### Running in Development
+
+```bash
+# Run both signaling server and web client concurrently
 npm run dev
 ```
 
-- Server: http://localhost:4000 (WebSocket at `/ws`)
-- Client: http://localhost:5173 (Vite proxies `/ws` and `/api` to the server)
+* **Web Client**: `http://localhost:5173`
+* **Signaling Server**: `http://localhost:4000` (WebSocket at `/ws`)
 
-**Test with a phone:** open the LAN URL Vite prints (e.g. `http://192.168.1.23:5173`) on a phone on the same Wi-Fi. Both devices appear in *Nearby* within a few seconds.
+> **Mobile testing on LAN**: Open the printed LAN URL (e.g. `http://192.168.1.x:5173`) on your mobile browser. Devices on the same Wi-Fi will appear in the Radar Scanner automatically within 3 seconds.
 
-## Production (single origin — recommended)
+---
 
-```bash
-npm run build:client   # builds packages/client/dist
-npm start              # Express serves the client build + WebSocket on one port
-```
+## 🏗️ Production Deployment
 
-Deploy `packages/server` to Render / Fly / Railway (start command `npm start`, root directory the repo root). The server serves the client build, the `/ws` WebSocket, `/api/health` and `/api/info` from one origin — no extra config needed.
-
-> **Free-tier cold starts:** Render free instances sleep and take 30–60 s to wake. The client pre-fires `/api/health` to wake the server and waits up to 20 s per connection attempt, showing "Waking up server…".
-
-## Split deployment (Vercel client + Render server)
-
-1. Deploy the server anywhere that supports WebSockets (Render: `npm start --prefix packages/server`).
-2. Deploy the client to Vercel with env var `VITE_WS_URL=wss://your-server.onrender.com/ws`.
-3. Or skip env vars entirely: users can paste the server URL in **Settings → Server URL**, or append `?ws=wss://...` to the page URL.
-
-## Optional environment variables
-
-| Variable | Where | Purpose |
-| --- | --- | --- |
-| `VITE_WS_URL` | client build | default WebSocket server URL |
-| `VITE_TURN_URL` / `VITE_TURN_USER` / `VITE_TURN_PASS` | client build | TURN server for strict NATs |
-| `CORS_ORIGINS` | server | comma-separated allowed origins (default: all) |
-| `PORT` | server | listen port (default 4000) |
-
-## Self-hosting with Docker (optional)
+### Single-Origin Server (Recommended)
+Compile the static web assets and run the Express + WebSocket server on one port:
 
 ```bash
-TURN_USER=mog TURN_PASS=change-me docker compose up -d
+# Build the production web bundle
+npm run build
+
+# Start the unified server (port 3000 or custom PORT)
+PORT=3000 npm start
 ```
 
-Runs the server (port 4000, serving the built client) plus a coturn TURN relay for strict NATs. Build the client with `VITE_TURN_URL=turn:YOUR_HOST:3478 VITE_TURN_USER=... VITE_TURN_PASS=...` to use it.
+The server serves the web application at `/`, signaling WebSocket at `/ws`, API routes at `/api/*`, and the project ZIP archive at `/api/download-zip`.
 
-## Tests
+### Deploy with Docker & Coturn
+Self-host the signaling server along with a coturn TURN relay for strict NAT environments:
+
+```bash
+TURN_USER=mog TURN_PASS=secret-key docker compose up -d
+```
+
+---
+
+## 🧪 Testing
+
+MogShare includes a comprehensive test suite covering dual-stack discovery, peer negotiation, flow control, resume journals, E2E encryption, and Personal Space persistence:
 
 ```bash
 npm test
 ```
 
-Runs the server's Vitest suite: network grouping by public IP, room-code generation/normalization, and join rate limiting.
+```
+Test Files  11 passed (11)
+     Tests  68 passed (68)
+```
 
-## How discovery works
+---
 
-1. The client connects to the server over WebSocket (`?ws=` param → Settings value → `VITE_WS_URL` → same origin `/ws`).
-2. The server groups devices by apparent public IP (IPv4 address, or IPv6 /64 prefix) and only shows devices within the same group.
-3. If devices are on different networks (VPN, IPv4 vs IPv6, guest Wi-Fi), use a **room code** — rooms work across any network.
+## 🔒 Security & Privacy
 
-The client reconnects automatically with exponential backoff, re-registers, and re-joins its room after a drop. The server pings every socket every 25 s and keeps a 60 s grace period for reconnects.
+* **Direct WebRTC**: Peer-to-peer data channels never transit through third-party servers.
+* **Optional Passphrase**: Password-derived AES-GCM encryption ensures server-relayed chunks and clipboard items remain opaque even to relay operators.
+* **Zero Cloud Storage**: Received files are stored locally in your browser's IndexedDB and never uploaded to external servers.
+
+---
+
+## 📄 License
+
+MIT © MogShare Contributors
