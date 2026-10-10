@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
-import { generateTurnCredentials } from '@shareapp/shared';
 import {
+  generateTurnCredentials,
+  type IceServerConfig,
   TURN_CREDENTIAL_TTL_SEC,
   DEFAULT_TURN_PORT_UDP,
   DEFAULT_TURN_PORT_TCP,
@@ -17,7 +18,7 @@ export async function handleTurnCredentialsRequest(
   try {
     const creds = await generateTurnCredentials(turnSecret, TURN_CREDENTIAL_TTL_SEC);
 
-    const iceServers: RTCIceServer[] = [
+    const iceServers: IceServerConfig[] = [
       { urls: `stun:${turnRealm}:${DEFAULT_TURN_PORT_UDP}` },
       {
         urls: [

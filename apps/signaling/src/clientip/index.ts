@@ -69,8 +69,12 @@ function expandIpv6(ip: string): string[] {
 
 export function normalizeIp(ip: string): string {
   let addr = (ip || '').trim();
+  addr = addr.split('%')[0];
   if (addr.startsWith('::ffff:')) addr = addr.slice(7);
-  return addr.split('%')[0].split(':')[0].includes('.') ? addr.split('%')[0] : addr.split('%')[0];
+  if (addr.includes('.') && addr.includes(':')) {
+    addr = addr.split(':')[0];
+  }
+  return addr;
 }
 
 /**

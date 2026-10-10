@@ -157,15 +157,21 @@ describe('Phase 5: Fault-Injection, Resume Journal & Bundling', () => {
 
     let finalComplete = false;
 
-    // Sender resumes: only sends blocks that are missing
+    // Sender resumes: uses real FileSenderPipeline with resumeMissingBlocks
+    let sender2: FileSenderPipeline;
     let receiver2: FileReceiverPipeline;
+
     receiver2 = new FileReceiverPipeline(
       transferId,
       testData.byteLength,
       writer,
       {
         sendCtlMessage: (msg: any) => {
-          // Acks returned
+          if (msg.type === 'block-ack') {
+            sender2.handleBlockAck(msg.payload.blockIndex, msg.payload.verified);
+          } else if (msg.type === 'credit-grant') {
+            sender2.grantCredits(msg.payload.credits);
+          }
         },
         onProgress: vi.fn(),
         onBlockVerified: (bIdx) => {
@@ -176,50 +182,34 @@ describe('Phase 5: Fault-Injection, Resume Journal & Bundling', () => {
         },
         onError: vi.fn(),
       },
-      blockSize
+      blockSize,
+      [0, 1] // Already verified blocks from Session 1
     );
 
-    // Feed receiver already verified blocks count so it tracks remaining blocks
-    receiver2['verifiedBlocks'].add(0);
-    receiver2['verifiedBlocks'].add(1);
+    sender2 = new FileSenderPipeline(
+      testFile,
+      transferId,
+      0,
+      {
+        sendDataChannel: (frame) => {
+          receiver2.handleDataFrame(frame);
+        },
+        sendCtlMessage: (msg: any) => {
+          if (msg.type === 'block-end') {
+            receiver2.handleBlockEnd(msg.payload);
+          }
+        },
+        getBufferedAmount: () => 0,
+        waitForBufferedAmountLow: async () => {},
+        onAckedProgress: vi.fn(),
+        onBlockCompleted: vi.fn(),
+        onFileCompleted: vi.fn(),
+        onError: vi.fn(),
+      },
+      { chunkSize, blockSize, resumeMissingBlocks: missingBlocks }
+    );
 
-    // Send only missing blocks (2 and 3)
-    for (const bIdx of missingBlocks) {
-      const bStart = bIdx * blockSize;
-      const bEnd = Math.min(testData.byteLength, (bIdx + 1) * blockSize);
-      const slice = testData.subarray(bStart, bEnd);
-
-      const digest = await crypto.subtle.digest('SHA-256', slice);
-      const blockHash = Array.from(new Uint8Array(digest))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-
-      // Send chunk
-      const frame = {
-        type: 1, // DATA
-        transferIdNum: 12345,
-        fileIndex: 0,
-        blockIndex: bIdx,
-        chunkIndex: 0,
-      };
-      const rawFrame = new Uint8Array(17 + slice.byteLength);
-      new DataView(rawFrame.buffer).setUint8(0, 1);
-      new DataView(rawFrame.buffer).setUint32(1, 12345, false);
-      new DataView(rawFrame.buffer).setUint32(5, 0, false);
-      new DataView(rawFrame.buffer).setUint32(9, bIdx, false);
-      new DataView(rawFrame.buffer).setUint32(13, 0, false);
-      rawFrame.set(slice, 17);
-
-      receiver2.handleDataFrame(rawFrame);
-      receiver2.handleBlockEnd({
-        transferId,
-        fileIndex: 0,
-        blockIndex: bIdx,
-        blockHash,
-        byteLength: slice.byteLength,
-      });
-    }
-
+    await sender2.start();
     // Wait for async verification
     await new Promise((r) => setTimeout(r, 100));
 

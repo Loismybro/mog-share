@@ -94,7 +94,23 @@ export class Gateway {
     this.messageBuffer.push(deviceId, envelope);
     const conn = this.connections.get(deviceId);
     if (!conn) return false;
+    return this.sendDirect(conn, envelope);
+  }
 
+  public getMissedMessages(deviceId: string, sinceTimestamp: number): SignalingEnvelope[] {
+    return this.messageBuffer.getMissedMessages(deviceId, sinceTimestamp);
+  }
+
+  public replayMissed(deviceId: string, sinceTimestamp: number) {
+    const missed = this.messageBuffer.getMissedMessages(deviceId, sinceTimestamp);
+    const conn = this.connections.get(deviceId);
+    if (!conn) return;
+    for (const env of missed) {
+      this.sendDirect(conn, env);
+    }
+  }
+
+  private sendDirect(conn: ClientConnection, envelope: SignalingEnvelope): boolean {
     const raw = JSON.stringify(envelope);
 
     if (conn.transport === 'ws' && conn.ws && conn.ws.readyState === 1 /* OPEN */) {
@@ -115,12 +131,5 @@ export class Gateway {
     }
 
     return false;
-  }
-
-  public replayMissed(deviceId: string, sinceTimestamp: number) {
-    const missed = this.messageBuffer.getMissedMessages(deviceId, sinceTimestamp);
-    for (const env of missed) {
-      this.sendToClient(deviceId, env);
-    }
   }
 }

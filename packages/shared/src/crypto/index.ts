@@ -36,13 +36,8 @@ export async function generateTurnCredentials(
     let binary = '';
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
     credential = btoa(binary);
-  } else if (typeof process !== 'undefined' && process.versions?.node) {
-    const cryptoModule = await import('crypto');
-    const hmac = cryptoModule.createHmac('sha1', sharedSecret);
-    hmac.update(username);
-    credential = hmac.digest('base64');
   } else {
-    throw new Error('No crypto provider available for HMAC-SHA1');
+    throw new Error('No Web Crypto subtle provider available');
   }
 
   return { username, credential, ttl: ttlSeconds, expiryUnix };
@@ -54,19 +49,12 @@ export async function generateTurnCredentials(
  */
 export async function hashTruncated(value: string, salt = '', length = 12): Promise<string> {
   const input = `${salt}:${value}`;
-  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle) {
-    const enc = new TextEncoder();
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', enc.encode(input));
-    const hex = Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    return hex.slice(0, length);
-  } else if (typeof process !== 'undefined' && process.versions?.node) {
-    const cryptoModule = await import('crypto');
-    const hash = cryptoModule.createHash('sha256').update(input).digest('hex');
-    return hash.slice(0, length);
-  }
-  return value.slice(0, length);
+  const enc = new TextEncoder();
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', enc.encode(input));
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hex.slice(0, length);
 }
 
 /**
@@ -84,15 +72,9 @@ export async function computeSAS(
   const [k1, k2] = [ecdhPubA, ecdhPubB].sort();
   const combined = `SAS:${f1}:${f2}:${k1}:${k2}`;
 
-  let digestBytes: Uint8Array;
-  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle) {
-    const enc = new TextEncoder();
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', enc.encode(combined));
-    digestBytes = new Uint8Array(digest);
-  } else {
-    const cryptoModule = await import('crypto');
-    digestBytes = new Uint8Array(cryptoModule.createHash('sha256').update(combined).digest());
-  }
+  const enc = new TextEncoder();
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', enc.encode(combined));
+  const digestBytes = new Uint8Array(digest);
 
   // 4-digit code: (uint32 modulo 10000)
   const view = new DataView(digestBytes.buffer, digestBytes.byteOffset, 4);

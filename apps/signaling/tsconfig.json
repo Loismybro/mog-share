@@ -8,7 +8,12 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@shareapp/shared": ["../../packages/shared/src/index.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

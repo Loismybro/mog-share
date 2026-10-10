@@ -35,7 +35,7 @@ export class FileSenderPipeline {
   private availableCredits = DEFAULT_CREDIT_WINDOW_BLOCKS;
   private acknowledgedBlocks = new Set<number>();
   private totalBlocks: number;
-  private activeBlockIndex = 0;
+  private pendingBlocks: number[] = [];
 
   private isPaused = false;
   private isCancelled = false;
@@ -52,7 +52,7 @@ export class FileSenderPipeline {
     transferId: string,
     fileIndex = 0,
     callbacks: FileSenderCallbacks,
-    options?: { chunkSize?: number; blockSize?: number }
+    options?: { chunkSize?: number; blockSize?: number; resumeMissingBlocks?: number[] }
   ) {
     this.file = file;
     this.transferId = transferId;
@@ -62,6 +62,22 @@ export class FileSenderPipeline {
     this.chunkSize = options?.chunkSize || DEFAULT_CHUNK_SIZE;
     this.blockSize = options?.blockSize || DEFAULT_BLOCK_SIZE;
     this.totalBlocks = Math.max(1, Math.ceil(file.size / this.blockSize));
+
+    if (options?.resumeMissingBlocks) {
+      this.pendingBlocks = [...options.resumeMissingBlocks];
+      for (let b = 0; b < this.totalBlocks; b++) {
+        if (!options.resumeMissingBlocks.includes(b)) {
+          this.acknowledgedBlocks.add(b);
+          const blockStart = b * this.blockSize;
+          const blockEnd = Math.min(this.file.size, (b + 1) * this.blockSize);
+          this.acknowledgedBytes += blockEnd - blockStart;
+        }
+      }
+    } else {
+      for (let b = 0; b < this.totalBlocks; b++) {
+        this.pendingBlocks.push(b);
+      }
+    }
   }
 
   private hashTransferId(id: string): number {
@@ -77,9 +93,16 @@ export class FileSenderPipeline {
       this.availableCredits + credits,
       MAX_CREDIT_WINDOW_BLOCKS
     );
-    if (!this.inFlight && this.activeBlockIndex < this.totalBlocks && !this.isPaused && !this.isCancelled) {
+    if (!this.inFlight && this.pendingBlocks.length > 0 && !this.isPaused && !this.isCancelled) {
       void this.pump();
     }
+  }
+
+  public resumeWithMissingBlocks(missingBlocks: number[]) {
+    this.pendingBlocks = [...missingBlocks];
+    this.isPaused = false;
+    this.isCancelled = false;
+    void this.pump();
   }
 
   public handleBlockAck(blockIndex: number, verified: boolean) {
@@ -146,14 +169,13 @@ export class FileSenderPipeline {
 
     try {
       while (
-        this.activeBlockIndex < this.totalBlocks &&
+        this.pendingBlocks.length > 0 &&
         this.availableCredits > 0 &&
         !this.isPaused &&
         !this.isCancelled
       ) {
-        const blockIdx = this.activeBlockIndex;
+        const blockIdx = this.pendingBlocks.shift()!;
         this.availableCredits--;
-        this.activeBlockIndex++;
 
         await this.sendBlock(blockIdx);
       }

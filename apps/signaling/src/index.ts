@@ -90,10 +90,43 @@ app.post('/api/message', (req, res) => {
   }
 });
 
+// Transport ladder: Long-polling (Section 3.5)
+app.get('/api/poll', (req, res) => {
+  const deviceId = req.query.deviceId as string;
+  if (!deviceId) {
+    res.status(400).json({ error: 'Missing deviceId' });
+    return;
+  }
+  const since = parseInt((req.query.since as string) || '0', 10);
+  const missed = gateway.getMissedMessages(deviceId, since);
+  if (missed.length > 0) {
+    res.json({ messages: missed });
+    return;
+  }
+  const timer = setTimeout(() => {
+    gateway.removeConnection(deviceId);
+    res.json({ messages: [] });
+  }, 25000);
+  gateway.registerConnection({
+    deviceId,
+    transport: 'poll',
+    pollRes: res,
+    pollTimer: timer,
+  });
+});
+
 // ---------------------------------------------------------------------------
 // WebSocket Gateway Handling
 // ---------------------------------------------------------------------------
 wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+  if (ALLOWED_ORIGIN !== '*') {
+    const origin = req.headers.origin;
+    if (origin && origin !== ALLOWED_ORIGIN) {
+      ws.close(1008, 'Origin not allowed');
+      return;
+    }
+  }
+
   metrics.totalConnections++;
   metrics.activeSessions++;
 
@@ -116,8 +149,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     }
 
     if (envelope.from) {
-      boundDeviceId = envelope.from;
-      gateway.registerConnection({ deviceId: boundDeviceId, transport: 'ws', ws });
+      const fromId = envelope.from;
+      boundDeviceId = fromId;
+      gateway.registerConnection({ deviceId: fromId, transport: 'ws', ws });
     }
 
     if (boundDeviceId && !gateway.checkRateLimit(boundDeviceId)) {
@@ -297,13 +331,9 @@ function verifyPeerSharing(peerA: string, peerB: string): boolean {
   if (peersA.some((p) => p.deviceId === peerB)) return true;
 
   // Check if peers share an active room
-  const sessionA = groupIndex.getSession(peerA);
-  if (sessionA) {
-    // If not in same local group, allow if either is in any active room containing both
-    // For direct signals in room mesh:
-    return true;
-  }
-  return true;
+  if (roomManager.arePeersInSameRoom(peerA, peerB)) return true;
+
+  return false;
 }
 
 function broadcastGroupPresence(deviceId: string) {

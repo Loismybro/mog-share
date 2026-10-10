@@ -183,3 +183,10 @@ export interface ResumeRequestPayload {
   fileIndex: number;
   bitmap: string; // base64 representation of verified block bitset
 }
+
+export interface IceServerConfig {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+

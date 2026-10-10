@@ -40,7 +40,8 @@ export class FileReceiverPipeline {
     totalBytes: number,
     writer: BlockWriter,
     callbacks: FileReceiverCallbacks,
-    blockSize = DEFAULT_BLOCK_SIZE
+    blockSize = DEFAULT_BLOCK_SIZE,
+    initialVerifiedBlocks?: number[]
   ) {
     this.transferId = transferId;
     this.totalBytes = totalBytes;
@@ -48,6 +49,23 @@ export class FileReceiverPipeline {
     this.callbacks = callbacks;
     this.blockSize = blockSize;
     this.totalBlocks = Math.max(1, Math.ceil(totalBytes / blockSize));
+
+    if (initialVerifiedBlocks) {
+      for (const b of initialVerifiedBlocks) {
+        this.verifiedBlocks.add(b);
+        const bStart = b * this.blockSize;
+        const bEnd = Math.min(this.totalBytes, (b + 1) * this.blockSize);
+        this.verifiedBytes += bEnd - bStart;
+      }
+    }
+  }
+
+  public getVerifiedBlocks(): Set<number> {
+    return new Set(this.verifiedBlocks);
+  }
+
+  public isVerified(blockIndex: number): boolean {
+    return this.verifiedBlocks.has(blockIndex);
   }
 
   public handleDataFrame(rawFrame: Uint8Array) {

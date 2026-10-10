@@ -8,6 +8,7 @@ import {
   Users, Wifi, X, AlertTriangle,
 } from 'lucide-react';
 import { NetworkService, normalizeRoomCode, safeGet, safeSet, supportsStreamSave } from '../services/network';
+import { ROOM_CODE_LENGTH } from '@shareapp/shared';
 import { addHistory, clearHistory, getHistory, type HistoryEntry } from '../utils/history';
 import type {
   ClipboardItem, ConnState, Device, IncomingRequest, Platform, TransferFile,
@@ -270,7 +271,7 @@ export default function App() {
 
     // R2: hash joins are queued by the service until the connection is ready
     const code = normalizeRoomCode(window.location.hash);
-    if (code.length === 6) {
+    if (code.length === ROOM_CODE_LENGTH) {
       setRoomBusy('joining');
       net.joinRoom(code);
     }
@@ -886,7 +887,7 @@ function RoomView(props: {
   const handleInput = (raw: string) => {
     const code = normalizeRoomCode(raw);
     setInput(code);
-    if (code.length === 6) props.onJoin(code); // R7: auto-submit
+    if (code.length === ROOM_CODE_LENGTH) props.onJoin(code); // auto-submit
   };
 
   if (props.roomCode) {
@@ -978,16 +979,16 @@ function RoomView(props: {
 
         <div className="divider"><span>or join one</span></div>
 
-        <label className="field-label" htmlFor="room-code-input">6‑digit code</label>
+        <label className="field-label" htmlFor="room-code-input">8‑character code</label>
         <div className="join-row">
           <input
             id="room-code-input"
             className="input mono code-input"
-            inputMode="numeric"
-            pattern="[0-9]*"
+            inputMode="text"
+            autoCapitalize="characters"
             autoComplete="one-time-code"
-            placeholder="123456"
-            maxLength={6}
+            placeholder="23456789"
+            maxLength={ROOM_CODE_LENGTH}
             value={input}
             onChange={(e) => handleInput(e.target.value)}
             onPaste={(e) => {
@@ -998,7 +999,7 @@ function RoomView(props: {
           />
           <button
             className="btn btn-primary"
-            disabled={input.length !== 6 || !props.connReady || props.busy === 'joining'}
+            disabled={input.length !== ROOM_CODE_LENGTH || !props.connReady || props.busy === 'joining'}
             onClick={() => props.onJoin(input)}
           >
             {props.busy === 'joining' ? <Loader2 size={18} className="spin" /> : 'Join'}

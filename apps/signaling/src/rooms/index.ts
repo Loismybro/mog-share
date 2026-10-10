@@ -125,6 +125,15 @@ export class RoomManager {
     }
   }
 
+  public arePeersInSameRoom(peerA: string, peerB: string): boolean {
+    for (const room of this.rooms.values()) {
+      if (room.peerIds.has(peerA) && room.peerIds.has(peerB)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public pruneExpiredRooms() {
     const now = Date.now();
     for (const [code, room] of this.rooms) {

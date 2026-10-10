@@ -133,3 +133,151 @@ export class MemoryBlockWriter implements BlockWriter {
     this.blocks.clear();
   }
 }
+
+export class FSABlockWriter implements BlockWriter {
+  private writable: any;
+
+  constructor(writableStream: any) {
+    this.writable = writableStream;
+  }
+
+  async writeBlock(blockIndex: number, blockSize: number, data: Uint8Array): Promise<void> {
+    const offset = blockIndex * blockSize;
+    if (typeof this.writable.seek === 'function') {
+      await this.writable.seek(offset);
+      await this.writable.write(data);
+    } else {
+      await this.writable.write({ type: 'write', position: offset, data });
+    }
+  }
+
+  async finalize(): Promise<Blob | File | null> {
+    await this.writable.close();
+    return null;
+  }
+
+  async abort(): Promise<void> {
+    if (typeof this.writable.abort === 'function') {
+      await this.writable.abort();
+    }
+  }
+}
+
+export class OPFSBlockWriter implements BlockWriter {
+  private opfsFileName: string;
+  private fileHandle: any = null;
+  private syncHandle: any = null;
+  private writableStream: any = null;
+  private mimeType: string;
+
+  constructor(fileName: string, transferId = 'transfer', mimeType = 'application/octet-stream') {
+    this.opfsFileName = `shareapp_${transferId}_${fileName.replace(/[^\w.-]/g, '_')}`;
+    this.mimeType = mimeType;
+  }
+
+  async init(): Promise<void> {
+    if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      const root = await navigator.storage.getDirectory();
+      this.fileHandle = await root.getFileHandle(this.opfsFileName, { create: true });
+      if (typeof (this.fileHandle as any).createSyncAccessHandle === 'function') {
+        try {
+          this.syncHandle = await (this.fileHandle as any).createSyncAccessHandle();
+        } catch {
+          this.writableStream = await this.fileHandle.createWritable();
+        }
+      } else if (typeof this.fileHandle.createWritable === 'function') {
+        this.writableStream = await this.fileHandle.createWritable();
+      }
+    }
+  }
+
+  async writeBlock(blockIndex: number, blockSize: number, data: Uint8Array): Promise<void> {
+    if (!this.fileHandle) {
+      await this.init();
+    }
+    const offset = blockIndex * blockSize;
+    if (this.syncHandle) {
+      this.syncHandle.write(data, { at: offset });
+      if (typeof this.syncHandle.flush === 'function') {
+        this.syncHandle.flush();
+      }
+    } else if (this.writableStream) {
+      if (typeof this.writableStream.seek === 'function') {
+        await this.writableStream.seek(offset);
+        await this.writableStream.write(data);
+      } else {
+        await this.writableStream.write({ type: 'write', position: offset, data });
+      }
+    }
+  }
+
+  async finalize(): Promise<File | Blob | null> {
+    if (this.syncHandle) {
+      try { this.syncHandle.close(); } catch {}
+      this.syncHandle = null;
+    }
+    if (this.writableStream) {
+      try { await this.writableStream.close(); } catch {}
+      this.writableStream = null;
+    }
+    if (this.fileHandle) {
+      const file = await this.fileHandle.getFile();
+      setTimeout(async () => {
+        try {
+          const root = await navigator.storage.getDirectory();
+          await root.removeEntry(this.opfsFileName);
+        } catch {}
+      }, OPFS_TEMP_FILE_EXPIRY_MS);
+      return file;
+    }
+    return null;
+  }
+
+  async abort(): Promise<void> {
+    if (this.syncHandle) {
+      try { this.syncHandle.close(); } catch {}
+      this.syncHandle = null;
+    }
+    if (this.writableStream) {
+      try { await this.writableStream.abort(); } catch {}
+      this.writableStream = null;
+    }
+    if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        await root.removeEntry(this.opfsFileName);
+      } catch {}
+    }
+  }
+}
+
+export async function createBlockWriter(options: {
+  strategy?: StorageStrategy;
+  fileName: string;
+  fileSize: number;
+  mimeType?: string;
+  transferId?: string;
+  writableStream?: any;
+}): Promise<BlockWriter> {
+  const strategy = options.strategy || pickStorageStrategy(options.fileSize).strategy;
+
+  if (strategy === 'fsa' && options.writableStream) {
+    return new FSABlockWriter(options.writableStream);
+  }
+
+  if (strategy === 'opfs') {
+    const writer = new OPFSBlockWriter(
+      options.fileName,
+      options.transferId,
+      options.mimeType
+    );
+    try {
+      await writer.init();
+      return writer;
+    } catch {
+      return new MemoryBlockWriter(options.mimeType);
+    }
+  }
+
+  return new MemoryBlockWriter(options.mimeType);
+}
