@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Express } from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -27,7 +27,7 @@ const COTURN_SECRET = process.env.COTURN_SECRET || 'shareapp_secret_coturn_auth_
 const COTURN_REALM = process.env.COTURN_REALM || 'turn.example.com';
 const ALLOWED_ORIGIN = process.env.APP_ORIGIN || '*';
 
-const app = express();
+const app: Express = express();
 app.set('trust proxy', true);
 app.use(cors({ origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN }));
 app.use(express.json({ limit: `${MAX_SIGNALING_MESSAGE_SIZE}b` }));

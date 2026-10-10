@@ -52,6 +52,7 @@ export interface TransferFile {
   channel?: 'direct' | 'relay'; // F1: Direct (WebRTC) vs Relayed badge
   error?: string;
   blobUrl?: string;
+  fileBlob?: Blob | File;
   savedToDisk?: boolean; // T6: streamed straight to disk, no blob in memory
   createdAt: number;
   bytesTransferred?: number;

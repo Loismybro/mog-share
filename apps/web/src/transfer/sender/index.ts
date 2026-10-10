@@ -103,6 +103,17 @@ export class FileSenderPipeline {
     void this.pump();
   }
 
+  public retryBlock(blockIndex: number) {
+    if (!this.pendingBlocks.includes(blockIndex)) {
+      this.pendingBlocks.unshift(blockIndex);
+    }
+    this.isPaused = false;
+    this.isCancelled = false;
+    if (!this.inFlight) {
+      void this.pump();
+    }
+  }
+
   public handleBlockAck(blockIndex: number, verified: boolean) {
     if (!verified) {
       this.callbacks.onError(new Error(`Block ${blockIndex} failed verification on receiver`));

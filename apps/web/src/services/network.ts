@@ -568,7 +568,10 @@ export class NetworkService {
       }
 
       case 'block-retry': {
-        // Retry requested
+        const sender = this.activeSenders.get(payload.transferId);
+        if (sender && typeof payload.blockIndex === 'number') {
+          sender.retryBlock(payload.blockIndex);
+        }
         break;
       }
 
@@ -614,11 +617,18 @@ export class NetworkService {
       'pubB'
     );
 
+    let blobUrl: string | undefined;
+    try {
+      blobUrl = URL.createObjectURL(file);
+    } catch {}
+
     const transfer: TransferFile = {
       id: transferId,
       name: file.name,
       size: file.size,
       type: file.type || 'application/octet-stream',
+      fileBlob: file,
+      blobUrl,
       progress: 0,
       speedBytesPerSec: 0,
       speed: 0,
@@ -804,6 +814,7 @@ export class NetworkService {
           transfer.progress = 100;
           transfer.bytesTransferred = req.meta.size;
           if (output) {
+            transfer.fileBlob = output;
             transfer.blobUrl = URL.createObjectURL(output);
           }
           this.callbacks.onTransferUpdate(transfer);

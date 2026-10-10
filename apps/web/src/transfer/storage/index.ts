@@ -260,10 +260,15 @@ export async function createBlockWriter(options: {
   transferId?: string;
   writableStream?: any;
 }): Promise<BlockWriter> {
-  const strategy = options.strategy || pickStorageStrategy(options.fileSize).strategy;
+  const caps = detectStorageCapabilities();
+  let strategy = options.strategy || pickStorageStrategy(options.fileSize).strategy;
 
-  if (strategy === 'fsa' && options.writableStream) {
-    return new FSABlockWriter(options.writableStream);
+  if (strategy === 'fsa') {
+    if (options.writableStream) {
+      return new FSABlockWriter(options.writableStream);
+    }
+    // No writableStream provided (e.g. background/automated receive); fallback to OPFS if available
+    strategy = caps.hasOPFS ? 'opfs' : 'memory';
   }
 
   if (strategy === 'opfs') {

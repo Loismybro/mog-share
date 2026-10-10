@@ -5,7 +5,8 @@ import {
   Archive, Check, ClipboardList, Copy, Download, History as HistoryIcon,
   Laptop, Link2, Loader2, Lock, LogOut, MessageSquare, MonitorSmartphone,
   RefreshCw, Send, Settings as SettingsIcon, Share2, Smartphone, Trash2,
-  Users, Wifi, X, AlertTriangle,
+  Users, Wifi, X, AlertTriangle, HardDrive, Eye, Image as ImageIcon,
+  Music, Film, FileText, Box, Folder, Radio, Layers, ArrowUpRight, ArrowDownLeft,
 } from 'lucide-react';
 import { NetworkService, normalizeRoomCode, safeGet, safeSet, supportsStreamSave } from '../services/network';
 import { ROOM_CODE_LENGTH } from '@shareapp/shared';
@@ -16,6 +17,19 @@ import type {
 import { formatBytes, formatSpeed, formatTime } from '../utils/formatters';
 import { haptics } from '../haptics/index.js';
 import { DiagnosticsRunner } from '../diagnostics/index.js';
+import {
+  type PersonalSpaceItem,
+  getPersonalSpaceItems,
+  saveToPersonalSpace,
+  deleteFromPersonalSpace,
+  subscribePersonalSpace,
+  detectFileCategory,
+} from '../utils/personalSpace';
+import { PersonalSpaceView } from './PersonalSpaceView';
+import { FilePreviewModal, type PreviewableFile } from './FilePreviewModal';
+import { RadarScanner } from './RadarScanner';
+import { ConnectPcModal } from './ConnectPcModal';
+import { ReceiveModal } from './ReceiveModal';
 
 // ---------------------------------------------------------------------------
 // Identity helpers
@@ -144,7 +158,7 @@ async function readSharedFiles(): Promise<File[]> {
 
 interface Toast { id: number; kind: 'info' | 'success' | 'error'; message: string }
 
-type Tab = 'nearby' | 'room' | 'clipboard' | 'history';
+type Tab = 'nearby' | 'vault' | 'room' | 'clipboard' | 'history';
 type Theme = 'auto' | 'dark' | 'light';
 
 // ---------------------------------------------------------------------------
@@ -169,6 +183,11 @@ export default function App() {
   const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+
+  const [vaultItems, setVaultItems] = useState<PersonalSpaceItem[]>([]);
+  const [previewFile, setPreviewFile] = useState<PreviewableFile | null>(null);
+  const [showConnectPc, setShowConnectPc] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
 
   const [tab, setTab] = useState<Tab>('nearby');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -205,6 +224,20 @@ export default function App() {
     setToasts((t) => [...t, { id, kind, message }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
   }, []);
+
+  const loadVault = useCallback(async () => {
+    try {
+      const list = await getPersonalSpaceItems();
+      setVaultItems(list);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadVault();
+    return subscribePersonalSpace(() => { void loadVault(); });
+  }, [loadVault]);
 
   // Theme (manual toggle + prefers-color-scheme default)
   useEffect(() => {
@@ -244,6 +277,24 @@ export default function App() {
         if (t.status === 'completed' && t.direction === 'receiving' && t.blobUrl && autoAcceptNearbyRef.current && !historyRecorded.current.has(t.id + '_autosaved')) {
           historyRecorded.current.add(t.id + '_autosaved');
           saveTransferRef.current(t);
+        }
+        // Save completed receive into Personal Space (Vault)
+        if (t.status === 'completed' && t.direction === 'receiving' && !historyRecorded.current.has(t.id + '_vault')) {
+          historyRecorded.current.add(t.id + '_vault');
+          void saveToPersonalSpace({
+            id: t.id,
+            name: t.name,
+            size: t.size,
+            type: t.type,
+            category: detectFileCategory(t.name, t.type),
+            senderName: t.peerName,
+            senderId: t.peerId,
+            receivedAt: Date.now(),
+            blob: t.fileBlob,
+            blobUrl: t.blobUrl,
+            channel: t.channel,
+          });
+          pushToast('success', `Received ${t.name}! Saved to Personal Space — tap Open to view.`);
         }
         // F7: persist terminal states to IndexedDB history
         const terminal = ['completed', 'failed', 'declined', 'expired', 'cancelled'];
@@ -348,10 +399,17 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  const startSend = (peer: Device, files: File[]) => {
+  const startSend = (peer: Device, files: (File | Blob)[], customName?: string) => {
     if (!files.length) return;
     // T5: no global lock — the service runs at most 2 concurrent sends
-    for (const f of files) netRef.current?.sendFile(peer, f);
+    for (const f of files) {
+      if (f instanceof File) {
+        netRef.current?.sendFile(peer, f);
+      } else {
+        const fileObj = new File([f], customName || 'shared_file', { type: f.type });
+        netRef.current?.sendFile(peer, fileObj);
+      }
+    }
     pushToast('info', `Asked ${peer.name} to accept ${files.length} file${files.length > 1 ? 's' : ''}`);
     setSelectedFiles([]);
     setTargetPeer(null);
@@ -397,25 +455,58 @@ export default function App() {
     setIncoming((q) => q.filter((r) => r.fromId !== fromId));
   };
 
-  const saveTransfer = (t: TransferFile) => {
-    if (!t.blobUrl) return;
+  const saveTransfer = (t: TransferFile | PreviewableFile) => {
+    let url = t.blobUrl;
+    let cleanup = false;
+    if (!url && (t as any).fileBlob) {
+      url = URL.createObjectURL((t as any).fileBlob);
+      cleanup = true;
+    } else if (!url && (t as any).blob) {
+      url = URL.createObjectURL((t as any).blob);
+      cleanup = true;
+    }
+    if (!url) return;
     const a = document.createElement('a');
-    a.href = t.blobUrl;
+    a.href = url;
     a.download = sanitizeFileName(t.name);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    if (cleanup) {
+      setTimeout(() => URL.revokeObjectURL(url!), 10_000);
+    }
   };
   saveTransferRef.current = saveTransfer;
 
+  const handleOpenTransfer = (t: TransferFile) => {
+    setPreviewFile({
+      id: t.id,
+      name: t.name,
+      size: t.size,
+      type: t.type,
+      category: detectFileCategory(t.name, t.type),
+      blobUrl: t.blobUrl,
+      blob: t.fileBlob,
+      senderName: t.peerName,
+      receivedAt: t.createdAt,
+    });
+  };
+
   // F3: download all completed receives as one ZIP
   const saveAllAsZip = async (list: TransferFile[]) => {
-    const done = list.filter((t) => t.direction === 'receiving' && t.status === 'completed' && t.blobUrl);
+    const done = list.filter((t) => t.direction === 'receiving' && t.status === 'completed' && (t.blobUrl || t.fileBlob));
     if (done.length < 2) return;
     try {
       const entries: Record<string, Uint8Array> = {};
       for (const t of done) {
-        const buf = await (await fetch(t.blobUrl!)).arrayBuffer();
+        let buf: ArrayBuffer;
+        if (t.fileBlob) {
+          buf = await t.fileBlob.arrayBuffer();
+        } else if (t.blobUrl) {
+          buf = await (await fetch(t.blobUrl)).arrayBuffer();
+        } else {
+          continue;
+        }
         let name = sanitizeFileName(t.name);
         let n = 1;
         while (entries[name]) name = `${n++}-${sanitizeFileName(t.name)}`;
@@ -500,6 +591,13 @@ export default function App() {
         </div>
         <div className="topbar-actions">
           <button
+            className="btn btn-brutal btn-xs btn-pale-cyan"
+            onClick={() => setShowConnectPc(true)}
+            title="Connect to PC via Browser (WebShare)"
+          >
+            <Laptop size={14} /> Connect PC
+          </button>
+          <button
             className="conn-pill"
             onClick={() => setShowDiagnostics(true)}
             aria-label={`Connection: ${connState}. Open diagnostics`}
@@ -531,6 +629,10 @@ export default function App() {
             onClearSelected={() => setSelectedFiles([])}
             onRemoveSelected={(idx) => setSelectedFiles((prev) => prev.filter((_, i) => i !== idx))}
             onAddFiles={() => { setTargetPeer(null); fileInputRef.current?.click(); }}
+            onAddChosenFiles={(files) => {
+              if (targetPeer) startSend(targetPeer, files);
+              else setSelectedFiles((prev) => [...prev, ...files]);
+            }}
             onGoRoom={() => setTab('room')}
             onMessage={(peer) => setMessagePeer(peer)}
             deviceName={deviceName}
@@ -541,6 +643,17 @@ export default function App() {
               setAutoAcceptNearby(next);
               safeSet('mog_auto_accept_nearby', next ? 'true' : 'false');
             }}
+            onOpenReceiveMode={() => setShowReceiveModal(true)}
+          />
+        )}
+        {tab === 'vault' && (
+          <PersonalSpaceView
+            items={vaultItems}
+            peers={allPeers}
+            onOpenFile={(item) => setPreviewFile(item)}
+            onSendToPeer={(peer, blob, name) => startSend(peer, [blob], name)}
+            pushToast={pushToast}
+            onRefresh={loadVault}
           />
         )}
         {tab === 'room' && (
@@ -586,6 +699,7 @@ export default function App() {
       <nav className="tabbar" aria-label="Main">
         {([
           ['nearby', 'Nearby', <Wifi size={20} key="i" aria-hidden />],
+          ['vault', 'Space', <HardDrive size={20} key="i" aria-hidden />],
           ['room', 'Room', <Users size={20} key="i" aria-hidden />],
           ['clipboard', 'Clipboard', <ClipboardList size={20} key="i" aria-hidden />],
           ['history', 'History', <HistoryIcon size={20} key="i" aria-hidden />],
@@ -599,6 +713,7 @@ export default function App() {
             {icon}
             <span>{label}</span>
             {key === 'room' && roomCode && <span className="tab-badge" aria-hidden />}
+            {key === 'vault' && vaultItems.length > 0 && <span className="tab-count-badge">{vaultItems.length}</span>}
           </button>
         ))}
       </nav>
@@ -616,6 +731,7 @@ export default function App() {
         <TransferSheet
           transfers={transferList}
           onCancel={(id) => netRef.current?.cancelTransfer(id)}
+          onOpen={handleOpenTransfer}
           onSave={saveTransfer}
           onSaveAllZip={() => void saveAllAsZip(transferList)}
           onRetry={retryTransfer}
@@ -686,6 +802,47 @@ export default function App() {
           }}
         />
       )}
+      {showConnectPc && (
+        <ConnectPcModal
+          onClose={() => setShowConnectPc(false)}
+          publicUrl={publicUrl}
+          roomCode={roomCode}
+          pushToast={pushToast}
+        />
+      )}
+      {showReceiveModal && (
+        <ReceiveModal
+          onClose={() => setShowReceiveModal(false)}
+          deviceName={deviceName}
+          roomCode={roomCode}
+          publicUrl={publicUrl}
+          autoAcceptNearby={autoAcceptNearby}
+          onToggleAutoAccept={() => {
+            const next = !autoAcceptNearby;
+            setAutoAcceptNearby(next);
+            safeSet('mog_auto_accept_nearby', next ? 'true' : 'false');
+          }}
+          onGoVault={() => setTab('vault')}
+          buildRoomLink={buildRoomLink}
+          pushToast={pushToast}
+        />
+      )}
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          peers={allPeers}
+          onClose={() => setPreviewFile(null)}
+          onSave={saveTransfer}
+          onDelete={async (id) => {
+            await deleteFromPersonalSpace(id);
+            await loadVault();
+            setPreviewFile(null);
+            pushToast('info', 'File removed from Personal Space');
+          }}
+          onSendToPeer={(peer, blob, name) => startSend(peer, [blob], name)}
+          pushToast={pushToast}
+        />
+      )}
 
       {/* Toasts */}
       <div className="toast-stack" role="status" aria-live="polite">
@@ -711,16 +868,25 @@ function NearbyView(props: {
   onClearSelected: () => void;
   onRemoveSelected: (index: number) => void;
   onAddFiles: () => void;
+  onAddChosenFiles: (files: File[]) => void;
   onGoRoom: () => void;
   onMessage: (peer: Device) => void;
   deviceName: string;
   onRename: () => void;
   autoAcceptNearby: boolean;
   onToggleAutoAccept: () => void;
+  onOpenReceiveMode: () => void;
 }) {
   const { peers, selectedFiles } = props;
+  const [viewMode, setViewMode] = useState<'radar' | 'list'>('radar');
   const [dragOver, setDragOver] = useState<string | null>(null);
   const totalSize = selectedFiles.reduce((s, f) => s + f.size, 0);
+
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const musicInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const apkInputRef = useRef<HTMLInputElement>(null);
 
   // F4: thumbnails for selected images
   const previews = useMemo(() => selectedFiles.map((f) => (
@@ -730,88 +896,182 @@ function NearbyView(props: {
 
   return (
     <div className="view">
-      <h1 className="view-title">Nearby devices</h1>
-      <p className="view-sub">Devices on the same network appear automatically. Drop files or whole folders onto a device.</p>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '4px 0 14px 0' }}>
+      <h1 className="view-title">Nearby Devices</h1>
+      <p className="view-sub">Auto-discover Android & PC devices on Wi-Fi or mobile hotspot. Tap to share instantly.</p>
+
+      {/* Xender-Style Giant Send & Receive Action Hero Block */}
+      <div className="xender-hero-actions">
         <button
-          className="btn btn-ghost btn-sm"
-          onClick={props.onToggleAutoAccept}
-          style={{ fontSize: '12.5px', padding: '4px 14px', borderRadius: '999px', background: 'var(--card)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          className="xender-hero-btn xender-send-btn"
+          onClick={props.onAddFiles}
+          title="Pick files to send via Radar"
         >
-          {props.autoAcceptNearby ? '⚡ Auto-accept: ON (AirDrop mode)' : 'Auto-accept: OFF (ask each time)'}
+          <div className="xender-hero-icon-wrap">
+            <ArrowUpRight size={28} />
+          </div>
+          <div className="xender-hero-text">
+            <span className="xender-hero-title">SEND</span>
+            <span className="xender-hero-subtitle">Pick Photos, Music, APKs & Share</span>
+          </div>
+        </button>
+
+        <button
+          className="xender-hero-btn xender-receive-btn"
+          onClick={props.onOpenReceiveMode}
+          title="Ready to receive files from nearby devices"
+        >
+          <div className="xender-hero-icon-wrap">
+            <ArrowDownLeft size={28} />
+          </div>
+          <div className="xender-hero-text">
+            <span className="xender-hero-title">RECEIVE</span>
+            <span className="xender-hero-subtitle">Wait for Incoming Files / QR Beacon</span>
+          </div>
         </button>
       </div>
 
-      {peers.length === 0 ? (
-        <div className="empty-state">
-          <div className="pulse-ring" aria-hidden><Wifi size={28} /></div>
-          <p className="empty-title">
-            {props.connState === 'ready' ? 'Scanning network for nearby devices…' : 'Connecting to network…'}
-          </p>
-          {props.showChecklist && (
-            <div className="checklist card">
-              <p className="checklist-title">Can't see a device?</p>
-              <ul>
-                <li>Both devices connected to same Wi‑Fi or mobile hotspot (2.4GHz / 5GHz)?</li>
-                <li>VPN switched off on both devices?</li>
-                <li>If AP isolation or guest Wi‑Fi is active, connect with a Room Code.</li>
-              </ul>
-              <button className="btn btn-primary" onClick={props.onGoRoom}>
-                Connect with a code instead
-              </button>
-            </div>
-          )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap', margin: '2px 0 8px 0' }}>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            className={`btn btn-brutal btn-xs ${viewMode === 'radar' ? 'btn-pale-mint' : 'btn-ghost-brutal'}`}
+            onClick={() => setViewMode('radar')}
+          >
+            <Radio size={13} /> Radar Discovery
+          </button>
+          <button
+            className={`btn btn-brutal btn-xs ${viewMode === 'list' ? 'btn-pale-butter' : 'btn-ghost-brutal'}`}
+            onClick={() => setViewMode('list')}
+          >
+            <Users size={13} /> Devices ({peers.length})
+          </button>
         </div>
-      ) : (
-        <div className="device-grid">
-          {peers.map((p) => (
-            <div
-              key={p.id}
-              className={`device-card card ${dragOver === p.id ? 'drag-over' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(p.id); }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(null);
-                void collectDroppedFiles(e.dataTransfer).then((files) => {
-                  if (files.length) props.onDropFiles(p, files);
-                });
-              }}
-            >
-              <button
-                className="device-main"
-                onClick={() => (selectedFiles.length ? props.onSendSelected(p) : props.onPickFor(p))}
-                aria-label={selectedFiles.length ? `Send ${selectedFiles.length} files to ${p.name}` : `Send files to ${p.name}`}
-              >
-                <span className="device-avatar" aria-hidden>{platformIcon(p.platform)}</span>
-                <span className="device-info">
-                  <span className="device-name">{p.name}</span>
-                  <span className="device-hint">
-                    {selectedFiles.length ? `Tap to send ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}` : 'Tap to pick files · or drop here'}
-                  </span>
-                </span>
-              </button>
-              <button className="icon-btn subtle" onClick={() => props.onMessage(p)} aria-label={`Send a message to ${p.name}`}>
-                <MessageSquare size={18} />
-              </button>
-            </div>
-          ))}
-        </div>
+
+        <button
+          className="btn btn-brutal btn-xs"
+          onClick={props.onToggleAutoAccept}
+          style={{ fontSize: '12px' }}
+        >
+          {props.autoAcceptNearby ? '⚡ Auto-accept: ON (AirDrop mode)' : 'Auto-accept: OFF'}
+        </button>
+      </div>
+
+      {/* Radar Scanner View */}
+      {viewMode === 'radar' && (
+        <RadarScanner
+          deviceName={props.deviceName}
+          peers={peers}
+          isScanning={props.connState === 'ready'}
+          onSelectPeer={(p) => (selectedFiles.length ? props.onSendSelected(p) : props.onPickFor(p))}
+        />
       )}
 
-      <div className="row-gap">
-        <button className="btn btn-ghost" onClick={props.onAddFiles}>Choose files first</button>
+      {/* Device Cards Grid View */}
+      {(viewMode === 'list' || peers.length === 0) && (
+        peers.length === 0 ? (
+          <div className="empty-state">
+            <div className="pulse-ring" aria-hidden><Wifi size={28} /></div>
+            <p className="empty-title font-bold">
+              {props.connState === 'ready' ? 'Scanning network for nearby devices…' : 'Connecting to network…'}
+            </p>
+            {props.showChecklist && (
+              <div className="checklist card brutal-card">
+                <p className="checklist-title font-bold">Can't see a device?</p>
+                <ul>
+                  <li>Both devices connected to same Wi‑Fi or mobile hotspot (2.4GHz / 5GHz)?</li>
+                  <li>VPN switched off on both devices?</li>
+                  <li>If AP isolation or guest Wi‑Fi is active, connect with a Room Code.</li>
+                </ul>
+                <button className="btn btn-brutal btn-primary-brutal" onClick={props.onGoRoom}>
+                  Connect with a code instead
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="device-grid">
+            {peers.map((p) => (
+              <div
+                key={p.id}
+                className={`device-card card brutal-card ${dragOver === p.id ? 'drag-over' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(p.id); }}
+                onDragLeave={() => setDragOver(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(null);
+                  void collectDroppedFiles(e.dataTransfer).then((files) => {
+                    if (files.length) props.onDropFiles(p, files);
+                  });
+                }}
+              >
+                <button
+                  className="device-main"
+                  onClick={() => (selectedFiles.length ? props.onSendSelected(p) : props.onPickFor(p))}
+                  aria-label={selectedFiles.length ? `Send ${selectedFiles.length} files to ${p.name}` : `Send files to ${p.name}`}
+                >
+                  <span className="device-avatar" aria-hidden>{platformIcon(p.platform)}</span>
+                  <span className="device-info">
+                    <span className="device-name">{p.name}</span>
+                    <span className="device-hint">
+                      {selectedFiles.length ? `Tap to send ${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''}` : 'Tap to pick files · or drop here'}
+                    </span>
+                  </span>
+                </button>
+                <button className="icon-btn brutal-btn-icon subtle" onClick={() => props.onMessage(p)} aria-label={`Send a message to ${p.name}`}>
+                  <MessageSquare size={18} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* Xender-Style Categorized Send Bar */}
+      <div className="send-category-hub card brutal-card pale-paper-bg">
+        <div className="send-category-title font-bold">SELECT FILES TO SHARE (XENDER STYLE)</div>
+        <div className="send-cat-grid">
+          <button className="send-cat-btn send-cat-photos" onClick={() => photoInputRef.current?.click()} title="Pick Photos">
+            <ImageIcon size={20} />
+            <span>Photos</span>
+          </button>
+          <button className="send-cat-btn send-cat-music" onClick={() => musicInputRef.current?.click()} title="Pick Music">
+            <Music size={20} />
+            <span>Music</span>
+          </button>
+          <button className="send-cat-btn send-cat-video" onClick={() => videoInputRef.current?.click()} title="Pick Videos">
+            <Film size={20} />
+            <span>Videos</span>
+          </button>
+          <button className="send-cat-btn send-cat-docs" onClick={() => docInputRef.current?.click()} title="Pick Documents">
+            <FileText size={20} />
+            <span>Docs</span>
+          </button>
+          <button className="send-cat-btn send-cat-apps" onClick={() => apkInputRef.current?.click()} title="Pick APKs">
+            <Box size={20} />
+            <span>APKs</span>
+          </button>
+          <button className="send-cat-btn send-cat-all" onClick={props.onAddFiles} title="Browse All Files">
+            <Folder size={20} />
+            <span>All Files</span>
+          </button>
+        </div>
       </div>
+
+      {/* Hidden file inputs for categories */}
+      <input ref={photoInputRef} type="file" multiple accept="image/*" hidden onChange={(e) => { if (e.target.files) { props.onAddChosenFiles(Array.from(e.target.files)); e.target.value = ''; } }} />
+      <input ref={musicInputRef} type="file" multiple accept="audio/*" hidden onChange={(e) => { if (e.target.files) { props.onAddChosenFiles(Array.from(e.target.files)); e.target.value = ''; } }} />
+      <input ref={videoInputRef} type="file" multiple accept="video/*" hidden onChange={(e) => { if (e.target.files) { props.onAddChosenFiles(Array.from(e.target.files)); e.target.value = ''; } }} />
+      <input ref={docInputRef} type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.md" hidden onChange={(e) => { if (e.target.files) { props.onAddChosenFiles(Array.from(e.target.files)); e.target.value = ''; } }} />
+      <input ref={apkInputRef} type="file" multiple accept=".apk,.xapk,.zip,.bin,.tar,.gz" hidden onChange={(e) => { if (e.target.files) { props.onAddChosenFiles(Array.from(e.target.files)); e.target.value = ''; } }} />
 
       {/* Sticky send bar with previews */}
       {selectedFiles.length > 0 && (
-        <div className="send-bar card">
+        <div className="send-bar card brutal-card">
           <div className="send-bar-row">
             <div className="send-bar-info">
-              <strong>{selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''}</strong>
+              <strong>{selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} staged</strong>
               <span className="muted mono">{formatBytes(totalSize)}</span>
             </div>
-            <span className="muted">{peers.length ? 'Tap a device to send' : 'Scanning network for nearby devices…'}</span>
+            <span className="muted font-bold small">{peers.length ? 'Tap a peer in radar or list to send!' : 'Scanning for nearby peers…'}</span>
             <button className="icon-btn subtle" onClick={props.onClearSelected} aria-label="Clear selected files">
               <X size={18} />
             </button>
@@ -821,10 +1081,10 @@ function NearbyView(props: {
               <button key={`${f.name}-${i}`} className="thumb" title={`${f.name} — tap to remove`} onClick={() => props.onRemoveSelected(i)}>
                 {previews[i]
                   ? <img src={previews[i]!} alt={f.name} />
-                  : <span className="thumb-ext mono">{(f.name.split('.').pop() || 'file').slice(0, 4)}</span>}
+                  : <span className="thumb-ext mono font-bold">{(f.name.split('.').pop() || 'file').slice(0, 4)}</span>}
               </button>
             ))}
-            {selectedFiles.length > 12 && <span className="muted small">+{selectedFiles.length - 12}</span>}
+            {selectedFiles.length > 12 && <span className="muted small font-bold">+{selectedFiles.length - 12}</span>}
           </div>
         </div>
       )}
@@ -895,23 +1155,23 @@ function RoomView(props: {
       <div className="view">
         <h1 className="view-title">Room {props.locked && <Lock size={18} aria-label="Encrypted" />}</h1>
         <p className="view-sub">Anyone with this code can join from any network.</p>
-        <div className="card room-card">
+        <div className="card room-card brutal-card">
           <div className="code-boxes" aria-label={`Room code ${props.roomCode.split('').join(' ')}`}>
             {props.roomCode.split('').map((d, i) => (
               <span key={i} className="code-digit mono">{d}</span>
             ))}
           </div>
           <div className="room-actions">
-            <button className="btn btn-ghost" onClick={async () => {
+            <button className="btn btn-brutal btn-ghost-brutal" onClick={async () => {
               const ok = await copyText(link);
               props.pushToast(ok ? 'success' : 'error', ok ? 'Link copied' : 'Copy failed — long-press the link to copy');
             }}><Link2 size={16} /> Copy link</button>
             {typeof navigator.share === 'function' && (
-              <button className="btn btn-ghost" onClick={() => navigator.share({ title: 'Join my Mog Share room', url: link }).catch(() => undefined)}>
+              <button className="btn btn-brutal btn-ghost-brutal" onClick={() => navigator.share({ title: 'Join my Mog Share room', url: link }).catch(() => undefined)}>
                 <Share2 size={16} /> Share
               </button>
             )}
-            <button className="btn btn-danger-ghost" onClick={props.onLeave}><LogOut size={16} /> Leave</button>
+            <button className="btn btn-brutal btn-danger-brutal" onClick={props.onLeave}><LogOut size={16} /> Leave</button>
           </div>
           {qr && (
             <div className="qr-wrap">
@@ -930,12 +1190,12 @@ function RoomView(props: {
                 value={passInput}
                 onChange={(e) => setPassInput(e.target.value)}
               />
-              <button className="btn btn-primary" onClick={() => { props.onPassphrase(passInput); setShowPass(false); }}>
+              <button className="btn btn-brutal btn-primary-brutal" onClick={() => { props.onPassphrase(passInput); setShowPass(false); }}>
                 Set
               </button>
             </div>
           ) : (
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowPass(true)}>
+            <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={() => setShowPass(true)}>
               <Lock size={14} /> {props.locked ? 'Change passphrase' : 'Add a passphrase (encrypts relayed data)'}
             </button>
           )}
@@ -950,7 +1210,7 @@ function RoomView(props: {
         ) : (
           <div className="device-grid">
             {props.roomPeers.map((p) => (
-              <div key={p.id} className="device-card card">
+              <div key={p.id} className="device-card card brutal-card">
                 <button className="device-main" onClick={() => props.onPickFor(p)} aria-label={`Send files to ${p.name}`}>
                   <span className="device-avatar" aria-hidden>{platformIcon(p.platform)}</span>
                   <span className="device-info">
@@ -971,8 +1231,8 @@ function RoomView(props: {
       <h1 className="view-title">Connect with a code</h1>
       <p className="view-sub">Works across different networks — no same‑Wi‑Fi needed.</p>
 
-      <div className="card room-card">
-        <button className="btn btn-primary btn-lg" onClick={props.onCreate} disabled={!props.connReady || props.busy === 'creating'}>
+      <div className="card room-card brutal-card">
+        <button className="btn btn-brutal btn-primary-brutal btn-lg" onClick={props.onCreate} disabled={!props.connReady || props.busy === 'creating'}>
           {props.busy === 'creating' ? (<><Loader2 size={18} className="spin" /> Creating…</>) : 'Create a room'}
         </button>
         {!props.connReady && <p className="muted center">Connecting to server…</p>}
@@ -998,7 +1258,7 @@ function RoomView(props: {
             disabled={!props.connReady || props.busy === 'joining'}
           />
           <button
-            className="btn btn-primary"
+            className="btn btn-brutal btn-primary-brutal"
             disabled={input.length !== ROOM_CODE_LENGTH || !props.connReady || props.busy === 'joining'}
             onClick={() => props.onJoin(input)}
           >
@@ -1006,6 +1266,45 @@ function RoomView(props: {
           </button>
         </div>
         {props.error && <p className="error-text" role="alert">{props.error}</p>}
+
+        {/* Brutalist Quick Keypad */}
+        <div className="brutal-keypad">
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+            <button
+              key={digit}
+              type="button"
+              className="keypad-btn"
+              onClick={() => handleInput(input + digit)}
+              disabled={input.length >= ROOM_CODE_LENGTH || !props.connReady}
+            >
+              {digit}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="keypad-btn keypad-action"
+            onClick={() => handleInput('')}
+            disabled={!input || !props.connReady}
+          >
+            CLEAR
+          </button>
+          <button
+            type="button"
+            className="keypad-btn"
+            onClick={() => handleInput(input + '0')}
+            disabled={input.length >= ROOM_CODE_LENGTH || !props.connReady}
+          >
+            0
+          </button>
+          <button
+            type="button"
+            className="keypad-btn keypad-action"
+            onClick={() => handleInput(input.slice(0, -1))}
+            disabled={!input || !props.connReady}
+          >
+            ⌫
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1030,7 +1329,7 @@ function ClipboardView(props: {
         {props.encrypted && <> <Lock size={13} aria-hidden /> Encrypted with the room passphrase.</>}
       </p>
 
-      <div className="card">
+      <div className="card brutal-card">
         <textarea
           className="input textarea"
           rows={3}
@@ -1039,7 +1338,7 @@ function ClipboardView(props: {
           onChange={(e) => setText(e.target.value)}
         />
         <button
-          className="btn btn-primary"
+          className="btn btn-brutal btn-primary-brutal"
           disabled={!text.trim() || !props.canSend}
           onClick={() => { props.onBroadcast(text.trim()); setText(''); }}
         >
@@ -1054,13 +1353,13 @@ function ClipboardView(props: {
       ) : (
         <div className="clip-list">
           {props.items.map((item) => (
-            <div key={item.id} className="card clip-item">
+            <div key={item.id} className="card clip-item brutal-card">
               <div className="clip-meta">
                 <strong>{item.fromDevice}</strong>
                 <span className="muted">{new Date(item.timestamp).toLocaleTimeString()}</span>
               </div>
               <p className="clip-content">{item.content}</p>
-              <button className="btn btn-ghost" onClick={async () => {
+              <button className="btn btn-brutal btn-ghost-brutal" onClick={async () => {
                 const ok = await copyText(item.content);
                 props.pushToast(ok ? 'success' : 'error', ok ? 'Copied' : 'Copy failed');
               }}><Copy size={14} /> Copy</button>
@@ -1084,7 +1383,7 @@ function HistoryView(props: { entries: HistoryEntry[]; onClear: () => void }) {
           <p className="view-sub">Past transfers, stored only on this device.</p>
         </div>
         {props.entries.length > 0 && (
-          <button className="btn btn-ghost btn-sm" onClick={props.onClear}>
+          <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={props.onClear}>
             <Trash2 size={14} /> Clear
           </button>
         )}
@@ -1094,9 +1393,9 @@ function HistoryView(props: { entries: HistoryEntry[]; onClear: () => void }) {
       ) : (
         <div className="clip-list">
           {props.entries.map((e) => (
-            <div key={e.id} className="card history-item">
+            <div key={e.id} className="card history-item brutal-card">
               <div className="history-row">
-                <span className="transfer-name" title={e.name}>{e.name}</span>
+                <span className="transfer-name font-bold" title={e.name}>{e.name}</span>
                 <span className={`badge badge-${e.status}`}>{e.status}</span>
               </div>
               <p className="muted small mono">
@@ -1118,6 +1417,7 @@ function HistoryView(props: { entries: HistoryEntry[]; onClear: () => void }) {
 function TransferSheet(props: {
   transfers: TransferFile[];
   onCancel: (id: string) => void;
+  onOpen: (t: TransferFile) => void;
   onSave: (t: TransferFile) => void;
   onSaveAllZip: () => void;
   onRetry: (t: TransferFile) => void;
@@ -1136,14 +1436,29 @@ function TransferSheet(props: {
       {!collapsed && (
         <div className="sheet-body">
           {props.transfers.map((t) => (
-            <div key={t.id} className="transfer-row">
+            <div
+              key={t.id}
+              className="transfer-row"
+              style={{ cursor: t.status === 'completed' && (t.blobUrl || t.fileBlob) ? 'pointer' : 'default' }}
+              onClick={() => {
+                if (t.status === 'completed' && (t.blobUrl || t.fileBlob)) {
+                  props.onOpen(t);
+                }
+              }}
+            >
               <div className="transfer-top">
                 <span className="transfer-name-wrap">
                   {/* F4: thumbnail for received images */}
                   {t.blobUrl && t.type.startsWith('image/') && (
-                    <img className="transfer-thumb" src={t.blobUrl} alt="" aria-hidden />
+                    <img
+                      className="transfer-thumb"
+                      src={t.blobUrl}
+                      alt=""
+                      onClick={(e) => { e.stopPropagation(); props.onOpen(t); }}
+                      title="Click to preview image"
+                    />
                   )}
-                  <span className="transfer-name" title={t.name}>{t.name}</span>
+                  <span className="transfer-name font-bold" title={t.name}>{t.name}</span>
                 </span>
                 <span className="transfer-badges">
                   {t.channel && (
@@ -1168,29 +1483,38 @@ function TransferSheet(props: {
               {EXEC_RE.test(t.name) && t.direction === 'receiving' && t.status === 'completed' && (
                 <p className="warn-text"><AlertTriangle size={13} /> Executable file — only open it if you trust the sender.</p>
               )}
-              <div className="transfer-actions">
-                {t.status === 'completed' && t.direction === 'receiving' && t.blobUrl && (
-                  <button className="btn btn-primary btn-sm" onClick={() => props.onSave(t)}><Download size={14} /> Save</button>
+              <div className="transfer-actions" onClick={(e) => e.stopPropagation()}>
+                {t.status === 'completed' && (t.blobUrl || t.fileBlob) && (
+                  <button
+                    className="btn btn-brutal btn-primary-brutal btn-sm"
+                    onClick={() => props.onOpen(t)}
+                    title="Open and inspect file"
+                  >
+                    <Eye size={14} /> Open
+                  </button>
+                )}
+                {t.status === 'completed' && t.direction === 'receiving' && (t.blobUrl || t.fileBlob) && (
+                  <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={() => props.onSave(t)}><Download size={14} /> Save</button>
                 )}
                 {t.status === 'completed' && t.savedToDisk && (
                   <span className="muted small">Saved to disk</span>
                 )}
                 {(t.status === 'transferring' || t.status === 'connecting' || t.status === 'waiting') && (
-                  <button className="btn btn-danger-ghost btn-sm" onClick={() => props.onCancel(t.id)}><X size={14} /> Cancel</button>
+                  <button className="btn btn-brutal btn-danger-brutal btn-sm" onClick={() => props.onCancel(t.id)}><X size={14} /> Cancel</button>
                 )}
                 {(t.status === 'failed' || t.status === 'expired') && t.direction === 'sending' && (
-                  <button className="btn btn-ghost btn-sm" onClick={() => props.onRetry(t)}><RefreshCw size={14} /> Retry</button>
+                  <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={() => props.onRetry(t)}><RefreshCw size={14} /> Retry</button>
                 )}
               </div>
             </div>
           ))}
           <div className="transfer-actions">
             {completedReceives.length >= 2 && (
-              <button className="btn btn-ghost btn-sm" onClick={props.onSaveAllZip}>
+              <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={props.onSaveAllZip}>
                 <Archive size={14} /> Save all {completedReceives.length} as ZIP
               </button>
             )}
-            <button className="btn btn-ghost btn-sm" onClick={props.onClear}>Clear finished</button>
+            <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={props.onClear}>Clear finished</button>
           </div>
         </div>
       )}
@@ -1248,18 +1572,18 @@ function IncomingSheet(props: {
               )}
               <div className="incoming-actions">
                 {reqs.length > 1 ? (
-                  <button className="btn btn-primary btn-sm" onClick={() => props.onAcceptAll(fromId)}>
+                  <button className="btn btn-brutal btn-primary-brutal btn-sm" onClick={() => props.onAcceptAll(fromId)}>
                     <Check size={14} /> Accept all {reqs.length}
                   </button>
                 ) : (
-                  <button className="btn btn-primary btn-sm" onClick={() => props.onAccept(reqs[0])}>
+                  <button className="btn btn-brutal btn-primary-brutal btn-sm" onClick={() => props.onAccept(reqs[0])}>
                     <Check size={14} /> Accept
                   </button>
                 )}
-                <button className="btn btn-ghost btn-sm" onClick={() => props.onAccept(reqs[0], true)}>
+                <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={() => props.onAccept(reqs[0], true)}>
                   Always accept from this device
                 </button>
-                <button className="btn btn-danger-ghost btn-sm" onClick={() => reqs.forEach(props.onDecline)}>
+                <button className="btn btn-brutal btn-danger-brutal btn-sm" onClick={() => reqs.forEach(props.onDecline)}>
                   Decline
                 </button>
               </div>
@@ -1277,10 +1601,10 @@ function IncomingSheet(props: {
 function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="modal-overlay" onClick={props.onClose}>
-      <div className="modal card" role="dialog" aria-label={props.title} onClick={(e) => e.stopPropagation()}>
+      <div className="modal card brutal-card" role="dialog" aria-label={props.title} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h2>{props.title}</h2>
-          <button className="icon-btn subtle" onClick={props.onClose} aria-label="Close"><X size={18} /></button>
+          <h2 className="font-extrabold">{props.title}</h2>
+          <button className="icon-btn brutal-btn-icon" onClick={props.onClose} aria-label="Close"><X size={18} /></button>
         </div>
         {props.children}
       </div>
@@ -1328,7 +1652,7 @@ function SettingsModal(props: {
             key={opt}
             role="radio"
             aria-checked={th === opt}
-            className={`btn btn-sm ${th === opt ? 'btn-primary' : 'btn-ghost'}`}
+            className={`btn btn-brutal btn-sm ${th === opt ? 'btn-primary-brutal' : 'btn-ghost-brutal'}`}
             onClick={() => setTh(opt)}
           >
             {opt === 'auto' ? 'System' : opt === 'dark' ? 'Dark' : 'Light'}
@@ -1344,13 +1668,13 @@ function SettingsModal(props: {
       <input id="set-public" className="input" placeholder="https://mogshare.example.com" value={pub} onChange={(e) => setPub(e.target.value)} />
 
       {props.autoAcceptCount > 0 && (
-        <button className="btn btn-ghost btn-sm" onClick={props.onClearTrusted}>
+        <button className="btn btn-brutal btn-ghost-brutal btn-sm" onClick={props.onClearTrusted}>
           Forget {props.autoAcceptCount} trusted device{props.autoAcceptCount > 1 ? 's' : ''}
         </button>
       )}
 
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={() => props.onSave(name, server.trim(), pub.trim(), th, autoNearby)}>Save</button>
+        <button className="btn btn-brutal btn-primary-brutal" onClick={() => props.onSave(name, server.trim(), pub.trim(), th, autoNearby)}>Save</button>
       </div>
     </Modal>
   );
@@ -1402,13 +1726,13 @@ function DiagnosticsModal(props: {
       <pre className="diag mono">{displayText}</pre>
       <div className="modal-actions">
         <button
-          className="btn btn-ghost"
+          className="btn btn-brutal btn-ghost-brutal"
           disabled={running}
           onClick={handleRunFullDiagnostics}
         >
           {running ? 'Running tests…' : 'Run 10s Deep Diagnostics'}
         </button>
-        <button className="btn btn-primary" onClick={async () => {
+        <button className="btn btn-brutal btn-primary-brutal" onClick={async () => {
           const ok = await copyText(displayText);
           props.pushToast(ok ? 'success' : 'error', ok ? 'Diagnostics copied' : 'Copy failed');
         }}><Copy size={14} /> Copy diagnostics</button>
@@ -1423,8 +1747,8 @@ function RenameModal(props: { current: string; platform: Platform; onClose: () =
     <Modal title="Rename this device" onClose={props.onClose}>
       <input className="input" value={name} maxLength={40} autoFocus onChange={(e) => setName(e.target.value)} />
       <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={() => setName(generateDeviceName(props.platform))}>Reset</button>
-        <button className="btn btn-primary" onClick={() => props.onSave(name)}>Save</button>
+        <button className="btn btn-brutal btn-ghost-brutal" onClick={() => setName(generateDeviceName(props.platform))}>Reset</button>
+        <button className="btn btn-brutal btn-primary-brutal" onClick={() => props.onSave(name)}>Save</button>
       </div>
     </Modal>
   );
@@ -1436,7 +1760,7 @@ function MessageModal(props: { peer: Device; onClose: () => void; onSend: (text:
     <Modal title={`Message ${props.peer.name}`} onClose={props.onClose}>
       <textarea className="input textarea" rows={3} autoFocus placeholder="Type a message or paste a link…" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="modal-actions">
-        <button className="btn btn-primary" disabled={!text.trim()} onClick={() => props.onSend(text.trim())}>
+        <button className="btn btn-brutal btn-primary-brutal" disabled={!text.trim()} onClick={() => props.onSend(text.trim())}>
           <Send size={14} /> Send
         </button>
       </div>
