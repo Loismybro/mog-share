@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 
-// https://vite.dev/config/
 export default defineConfig({
   base: './',
   resolve: {
@@ -26,6 +25,22 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/api': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/ip': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/debug': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/healthz': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/metrics': {
         target: 'http://localhost:4000',
         changeOrigin: true,
       },

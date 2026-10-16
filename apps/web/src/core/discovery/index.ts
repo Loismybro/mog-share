@@ -28,7 +28,6 @@ export interface ProbeResult {
 }
 
 export function generateEphemeralDeviceId(): string {
-  // 128-bit random hex string (Section 3.3)
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
     const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
@@ -64,7 +63,7 @@ export function detectDeviceType(): 'phone' | 'tablet' | 'laptop' | 'desktop' | 
  */
 export function extractIpv6Prefix64(ip: string): string {
   const clean = ip.split('%')[0].toLowerCase();
-  let parts = clean.split(':');
+  const parts = clean.split(':');
   if (parts.length < 8) {
     const emptyIndex = parts.indexOf('');
     if (emptyIndex !== -1) {
@@ -83,42 +82,60 @@ export async function probeNetwork(
 ): Promise<ProbeResult> {
   const baseUrl = serverUrl.replace(/\/+$/, '');
 
-  // 1. In parallel, fetch v4 and v6 /ip probe endpoints with 2.5s timeouts
   const [v4Ip, v6Ip] = await Promise.all([
     fetchIpWithTimeout(`${baseUrl}/api/probe/v4`, DUAL_STACK_PROBE_TIMEOUT_MS),
     fetchIpWithTimeout(`${baseUrl}/api/probe/v6`, DUAL_STACK_PROBE_TIMEOUT_MS),
   ]);
 
-  // 2. Gather srflx candidates from throwaway RTCPeerConnection (second opinion)
   const { stunV4Ip, stunV6Ip } = await gatherStunSrflxIps(iceServers);
 
-  // 3. Build set of network keys
   const keys = new Set<string>();
 
-  // Full IPv4
   const finalV4 = v4Ip || stunV4Ip;
   if (finalV4) {
     keys.add(`v4:${finalV4}`);
   }
+  if (stunV4Ip && stunV4Ip !== finalV4) {
+    keys.add(`v4:${stunV4Ip}`);
+  }
 
-  // IPv6 /64 prefix
   const finalV6 = v6Ip || stunV6Ip;
   if (finalV6) {
     keys.add(`v6:${extractIpv6Prefix64(finalV6)}`);
   }
 
-  // Fallback: loopback if no public IP
-  if (keys.size === 0) {
-    keys.add('v4:127.0.0.1');
+  // Always include local-lan key if running on private/local network so LAN/hotspot peers match
+  if (
+    !v4Ip ||
+    v4Ip === '127.0.0.1' ||
+    v4Ip === '::1' ||
+    v4Ip.startsWith('192.168.') ||
+    v4Ip.startsWith('10.') ||
+    v4Ip.startsWith('172.')
+  ) {
+    keys.add('local-lan');
   }
 
-  // Detect and warn signals (Section 3.3)
+  if (keys.size === 0) {
+    keys.add('v4:127.0.0.1');
+    keys.add('local-lan');
+  }
+
   const isIpv6ProbeFailed = !v6Ip && !!v4Ip;
-  const isVpnDetected = !!(v4Ip && stunV4Ip && v4Ip !== stunV4Ip);
+  const isVpnDetected = !!(
+    v4Ip &&
+    stunV4Ip &&
+    v4Ip !== stunV4Ip &&
+    !v4Ip.startsWith('192.168.') &&
+    !v4Ip.startsWith('10.') &&
+    !v4Ip.startsWith('172.') &&
+    v4Ip !== '127.0.0.1'
+  );
   const isPrivateRelayDetected = !!(
     v4Ip &&
     v6Ip &&
     !stunV4Ip &&
+    typeof navigator !== 'undefined' &&
     navigator.userAgent.includes('Macintosh')
   );
 
@@ -154,6 +171,7 @@ async function fetchIpWithTimeout(url: string, timeoutMs: number): Promise<strin
     clearTimeout(timer);
     if (!res.ok) return null;
     const text = (await res.text()).trim();
+    if (text.startsWith('<') || text.length > 64) return null;
     return text.length > 0 ? text : null;
   } catch {
     clearTimeout(timer);

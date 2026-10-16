@@ -18,6 +18,7 @@ export interface FileSenderCallbacks {
   getBufferedAmount: () => number;
   waitForBufferedAmountLow: () => Promise<void>;
   onAckedProgress: (acknowledgedBytes: number, totalBytes: number, speedBps: number) => void;
+  onChunkProgress?: (sentBytes: number, totalBytes: number, speedBps: number) => void;
   onBlockCompleted: (blockIndex: number) => void;
   onFileCompleted: () => void;
   onError: (error: Error) => void;
@@ -40,9 +41,11 @@ export class FileSenderPipeline {
   private isCancelled = false;
   private inFlight = false;
 
+  private startTime = Date.now();
   private lastSpeedSampleTime = Date.now();
   private lastAckedBytes = 0;
   private acknowledgedBytes = 0;
+  private rawBytesSent = 0;
 
   private callbacks: FileSenderCallbacks;
 
@@ -70,6 +73,7 @@ export class FileSenderPipeline {
           const blockStart = b * this.blockSize;
           const blockEnd = Math.min(this.file.size, (b + 1) * this.blockSize);
           this.acknowledgedBytes += blockEnd - blockStart;
+          this.rawBytesSent += blockEnd - blockStart;
         }
       }
     } else {
@@ -129,14 +133,15 @@ export class FileSenderPipeline {
       const blockSizeActual = blockEnd - blockStart;
       this.acknowledgedBytes += blockSizeActual;
 
-      // Calculate speed based on verified acked bytes (Section 4.4, fixes A18)
       const now = Date.now();
-      const dt = (now - this.lastSpeedSampleTime) / 1000;
-      let speedBps = 0;
-      if (dt >= 0.5) {
-        speedBps = (this.acknowledgedBytes - this.lastAckedBytes) / dt;
+      const dt = Math.max(0.05, (now - this.lastSpeedSampleTime) / 1000);
+      const elapsedTotal = Math.max(0.05, (now - this.startTime) / 1000);
+      let speedBps = (this.acknowledgedBytes - this.lastAckedBytes) / dt;
+      if (dt >= 0.25) {
         this.lastSpeedSampleTime = now;
         this.lastAckedBytes = this.acknowledgedBytes;
+      } else {
+        speedBps = this.acknowledgedBytes / elapsedTotal;
       }
 
       this.callbacks.onAckedProgress(this.acknowledgedBytes, this.file.size, speedBps);
@@ -151,6 +156,8 @@ export class FileSenderPipeline {
   public async start() {
     this.isPaused = false;
     this.isCancelled = false;
+    this.startTime = Date.now();
+    this.lastSpeedSampleTime = Date.now();
     await this.pump();
   }
 
@@ -170,9 +177,6 @@ export class FileSenderPipeline {
     this.isPaused = false;
   }
 
-  /**
-   * Main pumping loop: respects Layer 1 transport backpressure and Layer 2 application credits.
-   */
   private async pump() {
     if (this.inFlight || this.isPaused || this.isCancelled) return;
     this.inFlight = true;
@@ -202,16 +206,18 @@ export class FileSenderPipeline {
     const slice = this.file.slice(startByte, endByte);
     const blockBuffer = await slice.arrayBuffer();
 
-    // Compute block hash for BLOCK_END integrity manifest (Section 4.5 & 4.7)
     const blockHash = await sha256Hex(blockBuffer);
 
     const totalBlockBytes = blockBuffer.byteLength;
-    const numChunks = Math.ceil(totalBlockBytes / this.chunkSize);
+    const numChunks = Math.max(1, Math.ceil(totalBlockBytes / this.chunkSize));
 
     for (let c = 0; c < numChunks; c++) {
       if (this.isCancelled) return;
+      while (this.isPaused && !this.isCancelled) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (this.isCancelled) return;
 
-      // Layer 1 (Transport backpressure): check bufferedAmount against high-water mark (1 MiB)
       if (this.callbacks.getBufferedAmount() > BUFFERED_AMOUNT_HIGH_WATERMARK) {
         await this.callbacks.waitForBufferedAmountLow();
       }
@@ -232,9 +238,18 @@ export class FileSenderPipeline {
       );
 
       await this.callbacks.sendDataChannel(frame);
+      this.rawBytesSent = Math.min(this.file.size, this.rawBytesSent + chunkBytes.byteLength);
+
+      if (this.callbacks.onChunkProgress && (c % 4 === 0 || c === numChunks - 1)) {
+        const elapsed = Math.max(0.05, (Date.now() - this.startTime) / 1000);
+        this.callbacks.onChunkProgress(
+          this.rawBytesSent,
+          this.file.size,
+          this.rawBytesSent / elapsed
+        );
+      }
     }
 
-    // Send BLOCK_END control message on ctl channel (Section 4.2 & 4.5)
     const blockEndPayload: BlockEndPayload = {
       transferId: this.transferId,
       fileIndex: this.fileIndex,

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import {
   Folder,
   HardDrive,
@@ -16,17 +16,18 @@ import {
   Layers,
   CheckSquare,
   Square,
-  Sparkles,
-  ExternalLink,
+  Plus,
 } from 'lucide-react';
 import { zipSync } from 'fflate';
 import { formatBytes } from '../utils/formatters';
 import {
   type PersonalSpaceItem,
   type FileCategory,
+  saveToPersonalSpace,
   deleteFromPersonalSpace,
   clearPersonalSpace,
   openFileWithSystemShare,
+  detectFileCategory,
 } from '../utils/personalSpace';
 import type { Device } from '../types';
 
@@ -44,8 +45,8 @@ export function PersonalSpaceView(props: {
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'largest' | 'smallest' | 'name'>('newest');
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const importInputRef = useRef<HTMLInputElement>(null);
 
-  // Category stats calculation
   const stats = useMemo(() => {
     let totalBytes = 0;
     const catBytes: Record<FileCategory, number> = {
@@ -77,7 +78,6 @@ export function PersonalSpaceView(props: {
     return { totalBytes, catBytes, catCounts };
   }, [items]);
 
-  // Filtering and Sorting
   const filteredItems = useMemo(() => {
     let list = items;
     if (selectedCategory !== 'all') {
@@ -85,17 +85,25 @@ export function PersonalSpaceView(props: {
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      list = list.filter((i) => i.name.toLowerCase().includes(q) || (i.senderName || '').toLowerCase().includes(q));
+      list = list.filter(
+        (i) => i.name.toLowerCase().includes(q) || (i.senderName || '').toLowerCase().includes(q)
+      );
     }
 
     return [...list].sort((a, b) => {
       switch (sortBy) {
-        case 'newest': return b.receivedAt - a.receivedAt;
-        case 'oldest': return a.receivedAt - b.receivedAt;
-        case 'largest': return b.size - a.size;
-        case 'smallest': return a.size - b.size;
-        case 'name': return a.name.localeCompare(b.name);
-        default: return 0;
+        case 'newest':
+          return b.receivedAt - a.receivedAt;
+        case 'oldest':
+          return a.receivedAt - b.receivedAt;
+        case 'largest':
+          return b.size - a.size;
+        case 'smallest':
+          return a.size - b.size;
+        case 'name':
+          return a.name.localeCompare(b.name);
+        default:
+          return 0;
       }
     });
   }, [items, selectedCategory, searchQuery, sortBy]);
@@ -115,32 +123,53 @@ export function PersonalSpaceView(props: {
     setSelectedIds(new Set());
   };
 
+  const handleImportFiles = async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    let count = 0;
+    for (const f of Array.from(fileList)) {
+      await saveToPersonalSpace({
+        id: `vault_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: f.name,
+        size: f.size,
+        type: f.type || 'application/octet-stream',
+        category: detectFileCategory(f.name, f.type),
+        senderName: 'Local Import',
+        receivedAt: Date.now(),
+        blob: f,
+      });
+      count++;
+    }
+    props.onRefresh();
+    props.pushToast('success', `Imported ${count} file${count > 1 ? 's' : ''} into Personal Space Vault`);
+    if (importInputRef.current) importInputRef.current.value = '';
+  };
+
   const handleDeleteItem = async (item: PersonalSpaceItem) => {
     await deleteFromPersonalSpace(item.id);
     props.onRefresh();
-    props.pushToast('info', `Removed ${item.name} from Personal Space`);
+    props.pushToast('info', `Deleted ${item.name}`);
   };
 
-  const handleDeleteSelected = async () => {
+  const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Delete ${selectedIds.size} file(s) from Personal Space?`)) return;
     for (const id of selectedIds) {
       await deleteFromPersonalSpace(id);
     }
-    clearSelection();
+    setSelectedIds(new Set());
+    setIsSelectMode(false);
     props.onRefresh();
-    props.pushToast('info', 'Deleted selected files');
+    props.pushToast('info', `Removed ${selectedIds.size} files from Vault`);
   };
 
-  const handleDownloadItem = (item: PersonalSpaceItem) => {
+  const handleDownloadSingle = (item: PersonalSpaceItem) => {
     let url = item.blobUrl;
-    let cleanup = false;
+    let created = false;
     if (!url && item.blob) {
       url = URL.createObjectURL(item.blob);
-      cleanup = true;
+      created = true;
     }
     if (!url) {
-      props.pushToast('error', 'File data unavailable to save');
+      props.pushToast('error', 'File data is no longer in local storage');
       return;
     }
     const a = document.createElement('a');
@@ -149,20 +178,20 @@ export function PersonalSpaceView(props: {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    if (cleanup) {
+    if (created) {
       setTimeout(() => URL.revokeObjectURL(url!), 10_000);
     }
-    props.pushToast('success', `Saved ${item.name}`);
   };
 
-  const handleDownloadSelectedZip = async () => {
-    const selectedFiles = items.filter((i) => selectedIds.has(i.id) && (i.blob || i.blobUrl));
-    if (selectedFiles.length === 0) return;
-
+  const handleExportZip = async (targetItems: PersonalSpaceItem[]) => {
+    const valid = targetItems.filter((i) => i.blob || i.blobUrl);
+    if (valid.length === 0) {
+      props.pushToast('error', 'No downloadable files to zip');
+      return;
+    }
     try {
-      props.pushToast('info', `Compressing ${selectedFiles.length} files…`);
       const entries: Record<string, Uint8Array> = {};
-      for (const item of selectedFiles) {
+      for (const item of valid) {
         let buf: ArrayBuffer;
         if (item.blob) {
           buf = await item.blob.arrayBuffer();
@@ -171,10 +200,10 @@ export function PersonalSpaceView(props: {
         } else {
           continue;
         }
-        let name = item.name;
-        let n = 1;
+        let name = item.name.replace(/[/\\:*?"<>|]/g, '_');
+        let idx = 1;
         while (entries[name]) {
-          name = `${n++}_${item.name}`;
+          name = `${idx++}_${item.name}`;
         }
         entries[name] = new Uint8Array(buf);
       }
@@ -182,221 +211,236 @@ export function PersonalSpaceView(props: {
       const zipped = zipSync(entries, { level: 0 });
       const copy = new Uint8Array(zipped.length);
       copy.set(zipped);
-      const zipBlob = new Blob([copy.buffer], { type: 'application/zip' });
-      const url = URL.createObjectURL(zipBlob);
+      const blob = new Blob([copy.buffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `mog-space-export-${Date.now()}.zip`;
+      a.download = `MogShare-Vault-${new Date().toISOString().slice(0, 10)}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      props.pushToast('success', `Exported ${selectedFiles.length} files as ZIP`);
-    } catch (err) {
-      console.error(err);
-      props.pushToast('error', 'Could not create ZIP archive');
+      props.pushToast('success', `Exported ${valid.length} files as ZIP`);
+    } catch {
+      props.pushToast('error', 'Failed to create ZIP archive');
     }
   };
 
-  const handleClearAll = async () => {
-    if (!window.confirm('Wipe all files from your Personal Space? This cannot be undone.')) return;
-    await clearPersonalSpace();
-    props.onRefresh();
-    props.pushToast('info', 'Personal Space cleared');
-  };
+  const categories: Array<{
+    key: FileCategory | 'all';
+    label: string;
+    icon: React.ReactNode;
+  }> = [
+    { key: 'all', label: 'All Files', icon: <Layers size={14} /> },
+    { key: 'images', label: 'Photos', icon: <ImageIcon size={14} /> },
+    { key: 'videos', label: 'Videos', icon: <Film size={14} /> },
+    { key: 'audio', label: 'Music', icon: <Music size={14} /> },
+    { key: 'documents', label: 'Docs', icon: <FileText size={14} /> },
+    { key: 'apps', label: 'APKs & Apps', icon: <Box size={14} /> },
+    { key: 'archives', label: 'Archives', icon: <Archive size={14} /> },
+  ];
 
-  const renderCategoryIcon = (cat: FileCategory, size = 18) => {
+  const getCategoryIcon = (cat: FileCategory) => {
     switch (cat) {
-      case 'images': return <ImageIcon size={size} />;
-      case 'videos': return <Film size={size} />;
-      case 'audio': return <Music size={size} />;
-      case 'documents': return <FileText size={size} />;
-      case 'apps': return <Box size={size} />;
-      case 'archives': return <Archive size={size} />;
-      default: return <Folder size={size} />;
+      case 'images':
+        return <ImageIcon size={28} />;
+      case 'videos':
+        return <Film size={28} />;
+      case 'audio':
+        return <Music size={28} />;
+      case 'documents':
+        return <FileText size={28} />;
+      case 'apps':
+        return <Box size={28} />;
+      case 'archives':
+        return <Archive size={28} />;
+      default:
+        return <Folder size={28} />;
     }
   };
 
   return (
-    <div className="view personal-space-view">
-      {/* View Header */}
-      <div className="space-header">
+    <div className="personal-space-view">
+      {/* Header */}
+      <div className="section-header-row">
         <div>
-          <div className="badge badge-brutal badge-pale-lavender mb-1">
-            <HardDrive size={13} /> PERSONAL VAULT
-          </div>
-          <h1 className="view-title">Personal Space</h1>
+          <h1 className="view-title">Personal Space Vault</h1>
           <p className="view-sub">
-            All files received on this device. Inspect, listen, watch, share, or export anytime.
+            Persistent browser vault for received files — preview media, inspect APKs/code, or re-share to peers.
           </p>
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => importInputRef.current?.click()}
+            title="Import files from your device into Personal Space"
+          >
+            <Plus size={15} /> Import Files
+          </button>
+          {items.length > 0 && (
+            <>
+              <button
+                className={`btn btn-sm ${isSelectMode ? 'btn-indigo' : 'btn-secondary'}`}
+                onClick={() => {
+                  setIsSelectMode(!isSelectMode);
+                  setSelectedIds(new Set());
+                }}
+              >
+                <CheckSquare size={14} /> {isSelectMode ? 'Done' : 'Select'}
+              </button>
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => void handleExportZip(items)}
+                title="Download entire vault as ZIP"
+              >
+                <Archive size={14} /> Export ZIP
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Storage Meter & Category Breakdown Banner */}
-      <div className="card brutal-card storage-banner pale-lavender-bg">
+      <input
+        ref={importInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => void handleImportFiles(e.target.files)}
+      />
+
+      {/* Storage Overview Card */}
+      <div className="card storage-banner">
         <div className="storage-top">
           <div className="storage-stat">
-            <span className="mono small font-bold text-uppercase tracking-wider">SPACE USED</span>
-            <div className="storage-number font-extrabold">{formatBytes(stats.totalBytes)}</div>
+            <span className="field-label" style={{ marginTop: 0 }}>
+              LOCAL INDEXEDDB VAULT STORAGE
+            </span>
+            <span className="storage-number mono">{formatBytes(stats.totalBytes)}</span>
           </div>
-          <div className="storage-count-pill mono small font-bold">
-            {items.length} {items.length === 1 ? 'FILE' : 'FILES'} STORED
+          <div className="storage-count-pill mono">
+            {items.length} {items.length === 1 ? 'stored item' : 'stored items'}
           </div>
         </div>
 
-        {/* Category breakdown chips */}
+        {/* Category Filter Chips */}
         <div className="category-pill-row">
-          <button
-            className={`cat-chip ${selectedCategory === 'all' ? 'cat-chip-active' : ''}`}
-            onClick={() => setSelectedCategory('all')}
-          >
-            <Layers size={13} /> All ({items.length})
-          </button>
-          {stats.catCounts.images > 0 && (
-            <button
-              className={`cat-chip cat-chip-butter ${selectedCategory === 'images' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('images')}
-            >
-              <ImageIcon size={13} /> Photos ({stats.catCounts.images})
-            </button>
-          )}
-          {stats.catCounts.audio > 0 && (
-            <button
-              className={`cat-chip cat-chip-lavender ${selectedCategory === 'audio' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('audio')}
-            >
-              <Music size={13} /> Music ({stats.catCounts.audio})
-            </button>
-          )}
-          {stats.catCounts.videos > 0 && (
-            <button
-              className={`cat-chip cat-chip-peach ${selectedCategory === 'videos' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('videos')}
-            >
-              <Film size={13} /> Videos ({stats.catCounts.videos})
-            </button>
-          )}
-          {stats.catCounts.documents > 0 && (
-            <button
-              className={`cat-chip cat-chip-mint ${selectedCategory === 'documents' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('documents')}
-            >
-              <FileText size={13} /> Docs ({stats.catCounts.documents})
-            </button>
-          )}
-          {stats.catCounts.apps > 0 && (
-            <button
-              className={`cat-chip cat-chip-cyan ${selectedCategory === 'apps' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('apps')}
-            >
-              <Box size={13} /> Apps ({stats.catCounts.apps})
-            </button>
-          )}
-          {stats.catCounts.archives > 0 && (
-            <button
-              className={`cat-chip cat-chip-rose ${selectedCategory === 'archives' ? 'cat-chip-active' : ''}`}
-              onClick={() => setSelectedCategory('archives')}
-            >
-              <Archive size={13} /> Archives ({stats.catCounts.archives})
-            </button>
-          )}
+          {categories.map((cat) => {
+            const count = cat.key === 'all' ? items.length : stats.catCounts[cat.key] || 0;
+            const active = selectedCategory === cat.key;
+            return (
+              <button
+                key={cat.key}
+                className={`cat-chip ${active ? 'cat-chip-active' : ''}`}
+                onClick={() => setSelectedCategory(cat.key)}
+              >
+                {cat.icon}
+                <span>{cat.label}</span>
+                <span className="cat-chip-count mono">{count}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Filter / Search & Action Controls Toolbar */}
-      <div className="vault-toolbar">
-        <div className="search-box">
-          <Search size={16} className="search-icon muted" />
-          <input
-            type="text"
-            className="input search-input"
-            placeholder="Search received files…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-
-        <div className="sort-box">
-          <select
-            className="select-brutal mono small"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-          >
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="largest">Largest size</option>
-            <option value="smallest">Smallest size</option>
-            <option value="name">Name (A-Z)</option>
-          </select>
-
-          <button
-            className={`btn btn-brutal btn-sm ${isSelectMode ? 'btn-pale-butter' : 'btn-ghost-brutal'}`}
-            onClick={() => {
-              setIsSelectMode(!isSelectMode);
-              if (isSelectMode) clearSelection();
-            }}
-          >
-            {isSelectMode ? 'Cancel' : 'Select'}
-          </button>
-        </div>
-      </div>
-
-      {/* Bulk action bar if selection active */}
-      {isSelectMode && (
-        <div className="card brutal-card bulk-action-bar pale-butter-bg">
-          <div className="bulk-info mono font-bold small">
-            {selectedIds.size} of {filteredItems.length} selected
+      {/* Search & Sort Toolbar */}
+      {items.length > 0 && (
+        <div className="vault-toolbar">
+          <div className="search-box">
+            <Search size={16} className="search-icon muted" />
+            <input
+              type="text"
+              className="input search-input"
+              placeholder="Search files by name or sender device…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
           </div>
-          <div className="bulk-actions">
-            <button className="btn btn-brutal btn-xs" onClick={selectAll}>Select All</button>
-            <button className="btn btn-brutal btn-xs" onClick={clearSelection}>Deselect</button>
-            <button
-              className="btn btn-brutal btn-primary-brutal btn-xs"
-              disabled={selectedIds.size === 0}
-              onClick={handleDownloadSelectedZip}
+          <div className="sort-box">
+            <select
+              className="select-modern"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              aria-label="Sort files"
             >
-              <Download size={13} /> Export ZIP ({selectedIds.size})
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="largest">Largest Size</option>
+              <option value="smallest">Smallest Size</option>
+              <option value="name">Name (A–Z)</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Select Bulk Action Bar */}
+      {isSelectMode && (
+        <div className="card bulk-action-bar">
+          <span className="font-bold small">
+            {selectedIds.size} of {filteredItems.length} selected
+          </span>
+          <div className="bulk-actions">
+            <button className="btn btn-xs btn-secondary" onClick={selectAll}>
+              Select All
+            </button>
+            <button className="btn btn-xs btn-secondary" onClick={clearSelection}>
+              Clear
             </button>
             <button
-              className="btn btn-brutal btn-danger-brutal btn-xs"
+              className="btn btn-xs btn-primary"
               disabled={selectedIds.size === 0}
-              onClick={handleDeleteSelected}
+              onClick={() =>
+                void handleExportZip(items.filter((i) => selectedIds.has(i.id)))
+              }
             >
-              <Trash2 size={13} /> Delete ({selectedIds.size})
+              <Archive size={13} /> ZIP Selected
+            </button>
+            <button
+              className="btn btn-xs btn-danger"
+              disabled={selectedIds.size === 0}
+              onClick={() => void handleBulkDelete()}
+            >
+              <Trash2 size={13} /> Delete Selected
             </button>
           </div>
         </div>
       )}
 
-      {/* File List / Grid */}
+      {/* Vault Items Grid */}
       {filteredItems.length === 0 ? (
-        <div className="card brutal-card empty-vault pale-paper-bg">
+        <div className="card empty-vault">
           <div className="empty-vault-icon">
-            <Folder size={42} />
+            <HardDrive size={30} />
           </div>
-          <h3 className="font-extrabold text-lg">No files in Personal Space</h3>
-          <p className="muted small center max-w-sm">
-            {searchQuery || selectedCategory !== 'all'
-              ? 'No files matched your filter criteria.'
-              : 'Files received from Android or PC devices will be safely kept in this Personal Space so you can open, play, and share them anytime!'}
+          <h3 className="font-bold" style={{ margin: 0 }}>
+            {items.length === 0 ? 'Your Personal Space Vault is Empty' : 'No Matching Files Found'}
+          </h3>
+          <p className="muted small center" style={{ maxWidth: 420, margin: 0 }}>
+            {items.length === 0
+              ? 'Files you receive from nearby devices or rooms are automatically preserved here, or you can import local files directly.'
+              : 'Try clearing your search query or switching the category filter above.'}
           </p>
+          {items.length === 0 && (
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={() => importInputRef.current?.click()}
+            >
+              <Plus size={15} /> Import Local Files to Vault
+            </button>
+          )}
         </div>
       ) : (
         <div className="vault-grid">
           {filteredItems.map((item) => {
             const isSelected = selectedIds.has(item.id);
-            const isImage = item.category === 'images' && item.blobUrl;
-
             return (
               <div
                 key={item.id}
-                className={`card brutal-card vault-file-card ${isSelected ? 'selected' : ''}`}
+                className={`card vault-file-card ${isSelected ? 'selected' : ''}`}
                 onClick={() => {
                   if (isSelectMode) toggleSelect(item.id);
                   else props.onOpenFile(item);
                 }}
               >
-                {/* Selection checkbox */}
                 {isSelectMode && (
                   <button
                     className="select-checkbox-btn"
@@ -404,105 +448,91 @@ export function PersonalSpaceView(props: {
                       e.stopPropagation();
                       toggleSelect(item.id);
                     }}
+                    aria-label={isSelected ? 'Deselect file' : 'Select file'}
                   >
-                    {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
+                    {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
                   </button>
                 )}
 
-                {/* File Thumbnail / Visual Header */}
                 <div className={`vault-file-thumb ${item.category}-bg`}>
-                  {isImage ? (
+                  {item.category === 'images' && item.blobUrl ? (
                     <img src={item.blobUrl} alt={item.name} className="vault-thumb-img" />
                   ) : (
-                    <div className="vault-thumb-icon">
-                      {renderCategoryIcon(item.category, 32)}
-                    </div>
+                    <div className="vault-thumb-icon">{getCategoryIcon(item.category)}</div>
                   )}
-                  <span className="vault-cat-badge badge-brutal">
-                    {item.category.toUpperCase()}
-                  </span>
+                  <span className="badge vault-cat-badge">{item.category.toUpperCase()}</span>
                 </div>
 
-                {/* File Details */}
                 <div className="vault-file-info">
-                  <h4 className="vault-file-name font-bold" title={item.name}>
+                  <h4 className="vault-file-name" title={item.name}>
                     {item.name}
                   </h4>
-                  <div className="vault-file-meta mono small muted">
+                  <div className="vault-file-meta muted mono">
                     <span>{formatBytes(item.size)}</span>
-                    <span>•</span>
+                    <span>·</span>
                     <span>{new Date(item.receivedAt).toLocaleDateString()}</span>
                   </div>
-                  {item.senderName && (
-                    <div className="vault-file-sender small font-medium">
-                      From: <strong>{item.senderName}</strong>
-                      {item.channel && (
-                        <span className="badge badge-brutal badge-xs ml-2" style={{ padding: '1px 6px', fontSize: '10px' }}>
-                          {item.channel === 'direct' ? '⚡ Direct' : '☁ Relay'}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  <div className="vault-file-sender">From: {item.senderName || 'Peer'}</div>
                 </div>
 
-                {/* Direct Action Buttons on Card */}
-                {!isSelectMode && (
-                  <div className="vault-file-actions" onClick={(e) => e.stopPropagation()}>
+                <div className="vault-file-actions" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="btn btn-xs btn-primary flex-1"
+                    onClick={() => props.onOpenFile(item)}
+                    title="Preview file"
+                  >
+                    <Eye size={13} /> Open
+                  </button>
+                  <button
+                    className="btn btn-xs btn-secondary"
+                    onClick={() => handleDownloadSingle(item)}
+                    title="Save to device"
+                  >
+                    <Download size={13} />
+                  </button>
+                  {item.blob && peers.length > 0 && (
                     <button
-                      className="btn btn-brutal btn-primary-brutal btn-sm flex-1"
-                      onClick={() => props.onOpenFile(item)}
-                      title="Open and preview file in app"
+                      className="btn btn-xs btn-secondary"
+                      onClick={() => props.onSendToPeer(peers[0], item.blob!, item.name)}
+                      title={`Forward to ${peers[0].name}`}
                     >
-                      <Eye size={14} /> Open
+                      <Share2 size={13} />
                     </button>
+                  )}
+                  {item.blob && typeof navigator !== 'undefined' && 'canShare' in navigator && (
                     <button
-                      className="btn btn-brutal btn-ghost-brutal btn-sm"
-                      onClick={() => handleDownloadItem(item)}
-                      title="Download to device"
+                      className="btn btn-xs btn-secondary"
+                      onClick={() => void openFileWithSystemShare(item.blob!, item.name, item.type)}
+                      title="System Share"
                     >
-                      <Download size={14} />
+                      <Share2 size={13} />
                     </button>
-                    <button
-                      className="btn btn-brutal btn-ghost-brutal btn-sm"
-                      onClick={async () => {
-                        let shared = false;
-                        if (item.blob) {
-                          shared = await openFileWithSystemShare(item.blob, item.name, item.type);
-                        }
-                        if (!shared) {
-                          const url = item.blobUrl || (item.blob ? URL.createObjectURL(item.blob) : null);
-                          if (url) {
-                            const win = window.open(url, '_blank');
-                            if (!win) {
-                              handleDownloadItem(item);
-                            }
-                          }
-                        }
-                      }}
-                      title="Share / Open with system"
-                    >
-                      <Share2 size={14} />
-                    </button>
-                    <button
-                      className="btn btn-brutal btn-danger-brutal btn-sm"
-                      onClick={() => handleDeleteItem(item)}
-                      title="Delete from space"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    className="btn btn-xs btn-danger"
+                    onClick={() => void handleDeleteItem(item)}
+                    title="Delete from Vault"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Footer Wipe option */}
       {items.length > 0 && (
         <div className="vault-footer">
-          <button className="btn btn-brutal btn-danger-brutal btn-sm" onClick={handleClearAll}>
-            <Trash2 size={14} /> Wipe All Personal Space Files
+          <button
+            className="btn btn-sm btn-danger"
+            onClick={async () => {
+              await clearPersonalSpace();
+              props.onRefresh();
+              props.pushToast('info', 'Personal Space Vault cleared');
+            }}
+          >
+            <Trash2 size={14} /> Clear Entire Vault
           </button>
         </div>
       )}

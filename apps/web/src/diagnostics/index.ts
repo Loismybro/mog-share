@@ -41,7 +41,7 @@ export class DiagnosticsRunner {
   private serverOrigin: string;
 
   constructor(serverOrigin = '') {
-    this.serverOrigin = serverOrigin;
+    this.serverOrigin = serverOrigin.replace(/\/+$/, '');
   }
 
   public async runFullDiagnostics(toggles?: {
@@ -81,7 +81,6 @@ export class DiagnosticsRunner {
       forceServerRelay: toggles?.forceServerRelay || false,
     };
 
-    // Probe tests
     try {
       if (typeof fetch !== 'undefined') {
         const res = await fetch(`${this.serverOrigin}/debug/whoami`).catch(() => null);
@@ -93,13 +92,14 @@ export class DiagnosticsRunner {
           if (data.family === 'ipv6') report.ipv6Reachable = true;
         }
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
-    // STUN srflx gather test
     if (typeof RTCPeerConnection !== 'undefined') {
       try {
         const pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:turn.example.com:3478' }],
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
         });
         pc.createDataChannel('diag');
         const offer = await pc.createOffer();
@@ -107,27 +107,31 @@ export class DiagnosticsRunner {
 
         await new Promise<void>((resolve) => {
           const timeout = setTimeout(() => {
-            pc.close();
+            try { pc.close(); } catch {}
             resolve();
-          }, 3000);
+          }, 2500);
 
           pc.onicecandidate = (ev) => {
             if (ev.candidate && ev.candidate.candidate.includes('srflx')) {
               report.stunResult.gatheredSrflx = true;
+              const parts = ev.candidate.candidate.split(' ');
+              if (parts[4]) report.stunResult.srflxIp = parts[4];
               clearTimeout(timeout);
-              pc.close();
+              try { pc.close(); } catch {}
               resolve();
             }
           };
         });
-      } catch { /* STUN test fallback */ }
+      } catch {
+        /* STUN test fallback */
+      }
     }
 
     return report;
   }
 
   public formatReportAsText(report: DiagnosticsReport): string {
-    return `=== ShareApp Connectivity & Diagnostics Report ===
+    return `=== MogShare Connectivity & Diagnostics Report ===
 Timestamp: ${report.timestamp}
 User Agent: ${report.userAgent}
 
@@ -138,7 +142,7 @@ Server Observed IP: ${report.probeResult.serverObservedIp || 'N/A'}
 Derived Group Key: ${report.probeResult.serverGroupKey || 'N/A'}
 
 [STUN / NAT]
-STUN Srflx Gathered: ${report.stunResult.gatheredSrflx}
+STUN Srflx Gathered: ${report.stunResult.gatheredSrflx}${report.stunResult.srflxIp ? ` (${report.stunResult.srflxIp})` : ''}
 
 [TURN Endpoints (Section 10)]
 UDP 3478: ${report.turnTransports.udp3478.reachable ? `OK (${report.turnTransports.udp3478.rttMs}ms)` : 'FAIL'}

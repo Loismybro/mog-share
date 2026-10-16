@@ -29,8 +29,8 @@ export class FileReceiverPipeline {
   private writer: BlockWriter;
   private callbacks: FileReceiverCallbacks;
 
-  // Active in-flight chunks for current blocks: blockIndex -> Map<chunkIndex, Uint8Array>
   private blockChunks = new Map<number, Map<number, Uint8Array>>();
+  private blockReceivedBytes = new Map<number, number>();
   private blockEndPayloads = new Map<number, BlockEndPayload>();
   private verifiedBlocks = new Set<number>();
   private blockRetryCounts = new Map<number, number>();
@@ -76,16 +76,33 @@ export class FileReceiverPipeline {
   public handleDataFrame(rawFrame: Uint8Array) {
     try {
       const { header, payload } = decodeBinaryFrame(rawFrame);
-      if (header.transferIdNum !== this.transferIdNum) return; // frame belongs to another transfer
+      if (header.transferIdNum !== this.transferIdNum) return;
       if (header.type === BinaryFrameType.DATA) {
         let chunksMap = this.blockChunks.get(header.blockIndex);
         if (!chunksMap) {
           chunksMap = new Map();
           this.blockChunks.set(header.blockIndex, chunksMap);
         }
+        const prevChunk = chunksMap.get(header.chunkIndex);
         chunksMap.set(header.chunkIndex, payload);
 
-        // Check if we already received BLOCK_END and can verify this block
+        const prevBlockBytes = this.blockReceivedBytes.get(header.blockIndex) || 0;
+        const delta = payload.byteLength - (prevChunk ? prevChunk.byteLength : 0);
+        const nextBlockBytes = prevBlockBytes + delta;
+        this.blockReceivedBytes.set(header.blockIndex, nextBlockBytes);
+
+        // Emit smooth intermediate progress during block reception
+        if (header.chunkIndex % 4 === 0) {
+          let inFlightBytes = 0;
+          for (const [bIdx, bBytes] of this.blockReceivedBytes.entries()) {
+            if (!this.verifiedBlocks.has(bIdx)) inFlightBytes += bBytes;
+          }
+          this.callbacks.onProgress(
+            Math.min(this.totalBytes, this.verifiedBytes + inFlightBytes),
+            this.totalBytes
+          );
+        }
+
         if (this.blockEndPayloads.has(header.blockIndex)) {
           void this.tryVerifyBlock(header.blockIndex);
         }
@@ -117,7 +134,6 @@ export class FileReceiverPipeline {
     const chunksMap = this.blockChunks.get(blockIndex);
     if (!endMeta || !chunksMap) return;
 
-    // Check if total received bytes for this block match byteLength
     let totalReceived = 0;
     const sortedIndices = Array.from(chunksMap.keys()).sort((a, b) => a - b);
     for (const idx of sortedIndices) {
@@ -125,10 +141,9 @@ export class FileReceiverPipeline {
     }
 
     if (totalReceived < endMeta.byteLength) {
-      return; // Still waiting for more chunks
+      return;
     }
 
-    // Assemble block buffer for hashing and writing
     const assembledBlock = new Uint8Array(endMeta.byteLength);
     let offset = 0;
     for (const idx of sortedIndices) {
@@ -137,7 +152,6 @@ export class FileReceiverPipeline {
       offset += chunk.byteLength;
     }
 
-    // Integrity Check (Section 4.7)
     const hashHex = await sha256Hex(assembledBlock);
 
     if (hashHex !== endMeta.blockHash) {
@@ -151,8 +165,8 @@ export class FileReceiverPipeline {
         return;
       }
 
-      // Request retransmission of this block
       this.blockChunks.delete(blockIndex);
+      this.blockReceivedBytes.delete(blockIndex);
       this.blockEndPayloads.delete(blockIndex);
       this.callbacks.sendCtlMessage({
         type: 'block-retry',
@@ -161,17 +175,15 @@ export class FileReceiverPipeline {
       return;
     }
 
-    // Hash matches! Write durably to disk/storage strategy (Section 4.6)
     await this.writer.writeBlock(blockIndex, this.blockSize, assembledBlock);
 
-    // Free memory immediately
     this.blockChunks.delete(blockIndex);
+    this.blockReceivedBytes.delete(blockIndex);
     this.blockEndPayloads.delete(blockIndex);
 
     this.verifiedBlocks.add(blockIndex);
     this.verifiedBytes += endMeta.byteLength;
 
-    // Send ACK to sender (Section 4.4)
     const ack: BlockAckPayload = {
       transferId: this.transferId,
       fileIndex: endMeta.fileIndex,
@@ -183,7 +195,6 @@ export class FileReceiverPipeline {
       payload: ack,
     });
 
-    // Return 1 block credit to replenish sender window (Section 4.4)
     const creditGrant: CreditGrantPayload = {
       transferId: this.transferId,
       credits: 1,
@@ -196,7 +207,6 @@ export class FileReceiverPipeline {
     this.callbacks.onProgress(this.verifiedBytes, this.totalBytes);
     this.callbacks.onBlockVerified(blockIndex);
 
-    // If all blocks are verified, finalize
     if (this.verifiedBlocks.size >= this.totalBlocks && !this.finalized) {
       this.finalized = true;
       const output = await this.writer.finalize();

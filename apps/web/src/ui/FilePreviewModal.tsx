@@ -15,9 +15,7 @@ import {
   RotateCcw,
   FileText,
   Music,
-  Film,
-  Image as ImageIcon,
-  Box,
+   Box,
   Send,
   Trash2,
   AlertTriangle,
@@ -86,20 +84,42 @@ export function FilePreviewModal(props: {
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   const mime = (file.type || '').toLowerCase();
 
-  const isImage = mime.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext);
-  const isAudio = mime.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus', 'wma'].includes(ext);
-  const isVideo = mime.startsWith('video/') || ['mp4', 'webm', 'mov', 'mkv', 'avi'].includes(ext);
+  const isImage =
+    mime.startsWith('image/') ||
+    ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext);
+  const isAudio =
+    mime.startsWith('audio/') ||
+    ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus', 'wma'].includes(ext);
+  const isVideo =
+    mime.startsWith('video/') || ['mp4', 'webm', 'mov', 'mkv', 'avi'].includes(ext);
   const isPdf = mime.includes('pdf') || ext === 'pdf';
   const isApk = ext === 'apk' || mime.includes('android.package-archive');
   const isText =
     mime.startsWith('text/') ||
-    ['txt', 'json', 'md', 'csv', 'log', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'py', 'sh', 'xml', 'yaml', 'yml'].includes(ext);
+    [
+      'txt',
+      'json',
+      'md',
+      'csv',
+      'log',
+      'html',
+      'css',
+      'js',
+      'ts',
+      'jsx',
+      'tsx',
+      'py',
+      'sh',
+      'xml',
+      'yaml',
+      'yml',
+    ].includes(ext);
 
-  // Load text content directly from blob or blobUrl
   useEffect(() => {
     if (isText) {
       if (file.blob) {
-        file.blob.text()
+        file.blob
+          .text()
           .then((t) => setTextContent(t.slice(0, 100_000)))
           .catch(() => setTextContent('Could not read text content'));
       } else if (activeBlobUrl) {
@@ -111,7 +131,6 @@ export function FilePreviewModal(props: {
     }
   }, [isText, file.blob, activeBlobUrl]);
 
-  // Audio time updates
   const handleAudioTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -125,10 +144,13 @@ export function FilePreviewModal(props: {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => setIsPlaying(true)).catch((e) => {
-        setIsPlaying(false);
-        setMediaError('Audio playback restricted by browser. Tap "Open With" or "Save" below.');
-      });
+      audioRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(() => {
+          setIsPlaying(false);
+          setMediaError('Audio playback restricted by browser. Tap "Open With" or "Save" below.');
+        });
     }
   };
 
@@ -182,7 +204,6 @@ export function FilePreviewModal(props: {
       }
     }
 
-    // Fallback: Open in new window or trigger browser download
     const url = activeBlobUrl || (blobToShare ? URL.createObjectURL(blobToShare) : null);
     if (url) {
       const win = window.open(url, '_blank');
@@ -222,26 +243,30 @@ export function FilePreviewModal(props: {
 
   return (
     <div className="modal-overlay" onClick={props.onClose}>
-      <div className="modal card preview-modal" role="dialog" aria-label={`Preview ${file.name}`} onClick={(e) => e.stopPropagation()}>
-        {/* Modal Header */}
+      <div
+        className="modal preview-modal"
+        role="dialog"
+        aria-label={`Preview ${file.name}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head preview-head">
           <div className="preview-header-meta">
-            <span className="badge badge-category">{file.category?.toUpperCase() || 'FILE'}</span>
-            <h2 className="preview-title" title={file.name}>{file.name}</h2>
+            <span className="badge badge-indigo">{file.category?.toUpperCase() || 'FILE'}</span>
+            <h2 className="preview-title" title={file.name}>
+              {file.name}
+            </h2>
             <span className="muted mono small">
               {formatBytes(file.size)}
               {file.senderName && ` · From ${file.senderName}`}
               {file.receivedAt && ` · ${new Date(file.receivedAt).toLocaleTimeString()}`}
             </span>
           </div>
-          <button className="icon-btn brutal-btn-icon" onClick={props.onClose} aria-label="Close">
+          <button className="icon-btn" onClick={props.onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
 
-        {/* Modal Body / Viewer Content */}
         <div className="preview-body">
-          {/* 1. Image Viewer */}
           {isImage && activeBlobUrl && (
             <div className="image-viewer-wrap">
               <div className="image-viewport">
@@ -254,7 +279,7 @@ export function FilePreviewModal(props: {
               </div>
               <div className="image-controls">
                 <button
-                  className="btn btn-brutal btn-xs"
+                  className="btn btn-xs btn-secondary"
                   onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
                   title="Zoom Out"
                 >
@@ -262,14 +287,14 @@ export function FilePreviewModal(props: {
                 </button>
                 <span className="mono small font-bold">{Math.round(zoom * 100)}%</span>
                 <button
-                  className="btn btn-brutal btn-xs"
+                  className="btn btn-xs btn-secondary"
                   onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
                   title="Zoom In"
                 >
                   <ZoomIn size={14} />
                 </button>
                 <button
-                  className="btn btn-brutal btn-xs"
+                  className="btn btn-xs btn-secondary"
                   onClick={() => setZoom(1)}
                   title="Reset Zoom"
                 >
@@ -279,7 +304,6 @@ export function FilePreviewModal(props: {
             </div>
           )}
 
-          {/* 2. Audio Player */}
           {isAudio && activeBlobUrl && (
             <div className="audio-player-card">
               <audio
@@ -288,16 +312,20 @@ export function FilePreviewModal(props: {
                 onTimeUpdate={handleAudioTimeUpdate}
                 onEnded={() => setIsPlaying(false)}
                 onLoadedMetadata={handleAudioTimeUpdate}
-                onError={() => setMediaError('Format not supported by browser audio engine. Tap "Open With" or "Save" below to play in system media player.')}
+                onError={() =>
+                  setMediaError(
+                    'Format not supported by browser audio engine. Tap "Open With" or "Save" below.'
+                  )
+                }
               />
               <div className="audio-artwork-box">
                 <Music size={44} className="audio-hero-icon" />
                 <div className={`audio-equalizer ${isPlaying ? 'playing' : ''}`}>
-                  <span className="eq-bar bar-1"></span>
-                  <span className="eq-bar bar-2"></span>
-                  <span className="eq-bar bar-3"></span>
-                  <span className="eq-bar bar-4"></span>
-                  <span className="eq-bar bar-5"></span>
+                  <span className="eq-bar bar-1" />
+                  <span className="eq-bar bar-2" />
+                  <span className="eq-bar bar-3" />
+                  <span className="eq-bar bar-4" />
+                  <span className="eq-bar bar-5" />
                 </div>
               </div>
 
@@ -307,7 +335,6 @@ export function FilePreviewModal(props: {
                 {mediaError && <p className="warn-text small">{mediaError}</p>}
               </div>
 
-              {/* Progress Scrubber */}
               <div className="audio-scrub-row">
                 <span className="mono small">{formatTime(Math.floor(currentTime))}</span>
                 <input
@@ -322,18 +349,17 @@ export function FilePreviewModal(props: {
                 <span className="mono small">{formatTime(Math.floor(duration))}</span>
               </div>
 
-              {/* Controls */}
               <div className="audio-btn-row">
                 <button
-                  className="btn btn-brutal btn-circle-lg play-pause-btn"
+                  className="btn btn-primary btn-circle-lg"
                   onClick={togglePlayAudio}
                   aria-label={isPlaying ? 'Pause' : 'Play'}
                 >
-                  {isPlaying ? <Pause size={24} /> : <Play size={24} style={{ marginLeft: 3 }} />}
+                  {isPlaying ? <Pause size={22} /> : <Play size={22} style={{ marginLeft: 2 }} />}
                 </button>
 
                 <div className="audio-vol-wrap">
-                  <button className="icon-btn brutal-btn-icon" onClick={handleToggleMute} aria-label="Mute">
+                  <button className="icon-btn" onClick={handleToggleMute} aria-label="Mute">
                     {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
                   </button>
                   <input
@@ -358,7 +384,6 @@ export function FilePreviewModal(props: {
             </div>
           )}
 
-          {/* 3. Video Player */}
           {isVideo && activeBlobUrl && (
             <div className="video-player-card">
               <video
@@ -367,19 +392,30 @@ export function FilePreviewModal(props: {
                 controls
                 playsInline
                 className="preview-video"
-                onError={() => setMediaError('Video codec not directly playable in browser. Tap "Open With" or "Save" below to launch VLC / video player.')}
+                onError={() =>
+                  setMediaError(
+                    'Video codec not directly playable in browser. Tap "Open With" or "Save" below.'
+                  )
+                }
               />
               {mediaError && <p className="warn-text small p-2">{mediaError}</p>}
             </div>
           )}
 
-          {/* 4. Text / Code Viewer */}
           {isText && (
             <div className="text-viewer-card">
               <div className="text-viewer-toolbar">
                 <span className="mono small font-bold">PREVIEW ({ext.toUpperCase() || 'TEXT'})</span>
-                <button className="btn btn-brutal btn-xs" onClick={handleCopyText}>
-                  {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy Text</>}
+                <button className="btn btn-xs btn-secondary" onClick={handleCopyText}>
+                  {copied ? (
+                    <>
+                      <Check size={12} /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={12} /> Copy Text
+                    </>
+                  )}
                 </button>
               </div>
               <pre className="text-viewer-pre mono">
@@ -388,28 +424,29 @@ export function FilePreviewModal(props: {
             </div>
           )}
 
-          {/* 5. PDF Viewer */}
           {isPdf && activeBlobUrl && (
             <div className="pdf-viewer-card">
               <iframe src={activeBlobUrl} title={file.name} className="pdf-iframe" />
             </div>
           )}
 
-          {/* 6. APK / App Package Inspector */}
           {isApk && (
-            <div className="inspector-card apk-inspector">
-              <div className="inspector-icon-wrap pale-mint-bg">
-                <Box size={48} className="apk-hero-icon" />
+            <div className="inspector-card">
+              <div className="inspector-icon-wrap apps-bg">
+                <Box size={40} />
               </div>
               <div className="inspector-content">
                 <h3 className="inspector-title font-bold">Android Application Package (.apk)</h3>
-                <p className="inspector-desc muted">
-                  This is an Android app installer file. Tap "Install / Open With" to launch the native Android Package Installer.
+                <p className="inspector-desc muted small">
+                  Tap "Open With" or "Save" to launch the native Android Package Installer.
                 </p>
                 <div className="inspector-meta-grid mono small">
-                  <div className="meta-cell"><span>Package:</span> <strong>{file.name}</strong></div>
-                  <div className="meta-cell"><span>Size:</span> <strong>{formatBytes(file.size)}</strong></div>
-                  <div className="meta-cell"><span>Format:</span> <strong>Dalvik Executable / APK</strong></div>
+                  <div>
+                    <span>Package:</span> <strong>{file.name}</strong>
+                  </div>
+                  <div>
+                    <span>Size:</span> <strong>{formatBytes(file.size)}</strong>
+                  </div>
                 </div>
                 <p className="warn-text small">
                   <AlertTriangle size={13} /> Only install apps from trusted peers.
@@ -418,49 +455,53 @@ export function FilePreviewModal(props: {
             </div>
           )}
 
-          {/* 7. Generic Binary / Archive Inspector */}
           {!isImage && !isAudio && !isVideo && !isText && !isPdf && !isApk && (
-            <div className="inspector-card generic-inspector">
-              <div className="inspector-icon-wrap pale-lavender-bg">
-                {file.category === 'archives' ? <Box size={44} /> : <FileText size={44} />}
+            <div className="inspector-card">
+              <div className="inspector-icon-wrap documents-bg">
+                {file.category === 'archives' ? <Box size={40} /> : <FileText size={40} />}
               </div>
               <div className="inspector-content">
                 <h3 className="inspector-title font-bold">{file.name}</h3>
-                <p className="inspector-desc muted">
-                  Binary / Document file ready to open with your system's default application or download.
+                <p className="inspector-desc muted small">
+                  Ready to open with your system's default application or save to disk.
                 </p>
                 <div className="inspector-meta-grid mono small">
-                  <div className="meta-cell"><span>Type:</span> <strong>{file.type || 'application/octet-stream'}</strong></div>
-                  <div className="meta-cell"><span>Size:</span> <strong>{formatBytes(file.size)}</strong></div>
+                  <div>
+                    <span>Type:</span> <strong>{file.type || 'application/octet-stream'}</strong>
+                  </div>
+                  <div>
+                    <span>Size:</span> <strong>{formatBytes(file.size)}</strong>
+                  </div>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Modal Actions Footer */}
         <div className="modal-actions preview-actions">
           <div className="actions-left">
             {props.onDelete && (
               <button
-                className="btn btn-brutal btn-danger-brutal btn-sm"
+                className="btn btn-sm btn-danger"
                 onClick={() => props.onDelete!(file.id)}
                 title="Delete from space"
               >
-                <Trash2 size={15} /> Delete
+                <Trash2 size={14} /> Delete
               </button>
             )}
             {peers.length > 0 && props.onSendToPeer && file.blob && (
               <div className="resend-dropdown-wrap">
                 <button
-                  className="btn btn-brutal btn-pale-yellow btn-sm"
+                  className="btn btn-sm btn-secondary"
                   onClick={() => setShowPeerPicker(!showPeerPicker)}
                 >
-                  <Send size={15} /> Send to…
+                  <Send size={14} /> Forward…
                 </button>
                 {showPeerPicker && (
                   <div className="peer-picker-menu">
-                    <p className="muted small font-bold" style={{ margin: '4px 8px' }}>Send to online peer:</p>
+                    <p className="muted small font-bold" style={{ margin: '4px 8px' }}>
+                      Forward to peer:
+                    </p>
                     {peers.map((p) => (
                       <button
                         key={p.id}
@@ -480,25 +521,22 @@ export function FilePreviewModal(props: {
           <div className="actions-right">
             {activeBlobUrl && (
               <button
-                className="btn btn-brutal btn-ghost-brutal btn-sm"
+                className="btn btn-sm btn-secondary"
                 onClick={() => window.open(activeBlobUrl, '_blank')}
                 title="Open raw file in new browser tab"
               >
-                <ExternalLink size={15} /> Tab
+                <ExternalLink size={14} /> New Tab
               </button>
             )}
             <button
-              className="btn btn-brutal btn-pale-cyan btn-sm"
+              className="btn btn-sm btn-secondary"
               onClick={handleSystemShare}
-              title="Open with system application (e.g. VLC, Gallery, Package Installer)"
+              title="Open with system application"
             >
-              <Share2 size={15} /> Open With…
+              <Share2 size={14} /> Open With…
             </button>
-            <button
-              className="btn btn-brutal btn-primary-brutal btn-sm"
-              onClick={handleDownload}
-            >
-              <Download size={15} /> Save / Download
+            <button className="btn btn-sm btn-primary" onClick={handleDownload}>
+              <Download size={14} /> Save File
             </button>
           </div>
         </div>

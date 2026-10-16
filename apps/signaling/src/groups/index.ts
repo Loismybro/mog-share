@@ -7,6 +7,12 @@ export interface DeviceSession {
   deviceId: string;
   name: string;
   platform: string;
+  model?: string;
+  os?: string;
+  browser?: string;
+  deviceType?: string;
+  batteryLevel?: number;
+  isCharging?: boolean;
   networkKeys: Set<string>;
   connectedAt: number;
   lastSeen: number;
@@ -24,6 +30,20 @@ export class LocalGroupIndex {
   private tokenToDeviceId = new Map<string, string>();
 
   public registerDevice(session: DeviceSession): { tooManyDevices: boolean } {
+    // Clean up old keys if re-registering existing device
+    const existing = this.devices.get(session.deviceId);
+    if (existing) {
+      if (existing.disconnectTimer) clearTimeout(existing.disconnectTimer);
+      this.tokenToDeviceId.delete(existing.resumeToken);
+      for (const k of existing.networkKeys) {
+        const s = this.keyToDevices.get(k);
+        if (s) {
+          s.delete(session.deviceId);
+          if (s.size === 0) this.keyToDevices.delete(k);
+        }
+      }
+    }
+
     this.devices.set(session.deviceId, session);
     this.tokenToDeviceId.set(session.resumeToken, session.deviceId);
 

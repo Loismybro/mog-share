@@ -1,18 +1,32 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractIpv6Prefix64, generateEphemeralDeviceId, generateFriendlyName } from '../../apps/web/src/core/discovery/index.js';
-import { computeBlockHash, computeRootHash, verifyRootHash } from '../../apps/web/src/transfer/integrity/index.js';
-import { MemoryBlockWriter, pickStorageStrategy } from '../../apps/web/src/transfer/storage/index.js';
+import { describe, it, expect } from 'vitest';
+import {
+  extractIpv6Prefix64,
+  generateEphemeralDeviceId,
+  generateFriendlyName,
+} from '../../apps/web/src/core/discovery/index.js';
+import {
+  computeBlockHash,
+  computeRootHash,
+  verifyRootHash,
+} from '../../apps/web/src/transfer/integrity/index.js';
+import {
+  MemoryBlockWriter,
+  pickStorageStrategy,
+} from '../../apps/web/src/transfer/storage/index.js';
 import { normalizeRoomCode } from '../../apps/web/src/services/network.js';
+import { detectDeviceProfileSync } from '../../apps/web/src/utils/deviceDetector.js';
+import {
+  deriveNetworkKeySet,
+  isPrivateOrLocalIp,
+} from '../../apps/signaling/src/clientip/index.js';
 import { ROOM_CODE_LENGTH } from '@shareapp/shared';
 
-describe('Signaling, Discovery & Integrity Subsystems', () => {
+describe('Signaling, Discovery, Auto-Device Detection & Integrity Subsystems', () => {
   it('correctly normalizes 8-character room codes according to Section 3.4 alphabet', () => {
-    // Unambiguous alphabet: 23456789ABCDEFGHJKLMNPQRSTUVWXYZ (no 0, 1, I, O)
     expect(normalizeRoomCode('#room=ABCDEFGH')).toBe('ABCDEFGH');
     expect(normalizeRoomCode('http://app.example.com/#ABCDEFGH')).toBe('ABCDEFGH');
     expect(normalizeRoomCode('23456789extra')).toBe('23456789');
     expect(normalizeRoomCode('23456789').length).toBe(ROOM_CODE_LENGTH);
-    // Strips invalid characters (0, 1, I, O)
     expect(normalizeRoomCode('01IOABCDEFGH')).toBe('ABCDEFGH');
   });
 
@@ -23,14 +37,34 @@ describe('Signaling, Discovery & Integrity Subsystems', () => {
     expect(id1.length).toBeGreaterThanOrEqual(16);
 
     const name = generateFriendlyName();
-    expect(name.split(' ')).toHaveLength(2); // Adjective + Animal
+    expect(name.split(' ')).toHaveLength(2);
+  });
+
+  it('auto-detects device profile synchronously in any environment', () => {
+    const profile = detectDeviceProfileSync();
+    expect(profile.platform).toBeDefined();
+    expect(profile.suggestedName.length).toBeGreaterThan(2);
+    expect(profile.connectionLabel).toBeDefined();
+  });
+
+  it('groups localhost and private LAN / hotspot IPs into a shared local-lan key set', () => {
+    expect(isPrivateOrLocalIp('127.0.0.1')).toBe(true);
+    expect(isPrivateOrLocalIp('192.168.1.45')).toBe(true);
+    expect(isPrivateOrLocalIp('172.20.10.2')).toBe(true);
+    expect(isPrivateOrLocalIp('8.8.8.8')).toBe(false);
+
+    const salt = 'test-salt-99';
+    const laptopKeys = deriveNetworkKeySet('127.0.0.1', salt, ['local-lan']);
+    const phoneKeys = deriveNetworkKeySet('192.168.1.88', salt, ['v4:192.168.1.88']);
+
+    const overlap = Array.from(laptopKeys).filter((k) => phoneKeys.has(k));
+    expect(overlap.length).toBeGreaterThan(0);
   });
 
   it('extracts /64 prefix correctly for diverse IPv6 address formats', () => {
     const fullV6 = '2001:0db8:85a3:0000:0000:8a2e:0370:7334';
     expect(extractIpv6Prefix64(fullV6)).toBe('2001:0db8:85a3:0000');
 
-    // Compressed IPv6
     const compressed = '2001:db8:abcd:1234::5678';
     expect(extractIpv6Prefix64(compressed)).toBe('2001:0db8:abcd:1234');
   });
@@ -57,7 +91,6 @@ describe('Signaling, Discovery & Integrity Subsystems', () => {
   });
 
   it('selects storage writer strategy and respects 200 MB memory limit (Section 4.6)', () => {
-    // In Node test environment, FSA and OPFS are absent, falling back to memory
     const smallFile = pickStorageStrategy(50 * 1024 * 1024);
     expect(smallFile.strategy).toBe('memory');
     expect(smallFile.warning).toBeUndefined();
@@ -66,7 +99,6 @@ describe('Signaling, Discovery & Integrity Subsystems', () => {
     expect(warnFile.strategy).toBe('memory');
     expect(warnFile.warning).toContain('High memory usage');
 
-    // Over 200 MB memory ceiling throws error
     expect(() => pickStorageStrategy(250 * 1024 * 1024)).toThrow(/200 MB memory ceiling/);
   });
 
@@ -75,7 +107,6 @@ describe('Signaling, Discovery & Integrity Subsystems', () => {
     const part2 = new TextEncoder().encode('World!');
     const part1 = new TextEncoder().encode('Hello ');
 
-    // Out of order writes (Section 4.6 random access)
     await writer.writeBlock(1, 6, part2);
     await writer.writeBlock(0, 6, part1);
 
