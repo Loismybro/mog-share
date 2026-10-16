@@ -37,6 +37,7 @@ export class SignalingLadderClient {
   private rungReattemptTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private wsTryCount = 0;
   private destroyed = false;
   private seq = 0;
 
@@ -98,7 +99,6 @@ export class SignalingLadderClient {
       return true;
     }
 
-    // For SSE or long-poll, messages up are sent via POST /api/message
     if (this.activeRung === 'sse' || this.activeRung === 'poll') {
       void fetch(`${this.getHttpBaseUrl()}/api/message`, {
         method: 'POST',
@@ -127,7 +127,9 @@ export class SignalingLadderClient {
       const timeoutTimer = setTimeout(() => {
         if (!settled) {
           settled = true;
-          try { this.ws?.close(); } catch {}
+          try {
+            this.ws?.close();
+          } catch {}
           reject(new Error(`WebSocket connection timed out after ${WS_CONNECT_TIMEOUT_MS}ms`));
         }
       }, WS_CONNECT_TIMEOUT_MS);
@@ -136,6 +138,7 @@ export class SignalingLadderClient {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutTimer);
+        this.wsTryCount = 0;
         this.onConnected('ws');
         resolve();
       };
@@ -144,7 +147,7 @@ export class SignalingLadderClient {
         this.handleIncomingRaw(ev.data);
       };
 
-      this.ws.onerror = (_ev) => {
+      this.ws.onerror = () => {
         if (!settled) {
           settled = true;
           clearTimeout(timeoutTimer);
@@ -153,7 +156,7 @@ export class SignalingLadderClient {
       };
 
       this.ws.onclose = () => {
-        if (settled && !this.destroyed) {
+        if (settled && !this.destroyed && this.activeRung === 'ws') {
           this.onConnectionLost();
         }
       };
@@ -174,7 +177,9 @@ export class SignalingLadderClient {
       const timeoutTimer = setTimeout(() => {
         if (!settled) {
           settled = true;
-          try { this.sse?.close(); } catch {}
+          try {
+            this.sse?.close();
+          } catch {}
           reject(new Error('SSE connection timed out'));
         }
       }, WS_CONNECT_TIMEOUT_MS);
@@ -191,12 +196,12 @@ export class SignalingLadderClient {
         this.handleIncomingRaw(ev.data);
       };
 
-      this.sse.onerror = (_err) => {
+      this.sse.onerror = () => {
         if (!settled) {
           settled = true;
           clearTimeout(timeoutTimer);
           reject(new Error('SSE connection failed'));
-        } else if (!this.destroyed) {
+        } else if (!this.destroyed && this.activeRung === 'sse') {
           this.onConnectionLost();
         }
       };
@@ -226,8 +231,8 @@ export class SignalingLadderClient {
           }
         }
       } catch (err: any) {
-        if (this.destroyed || err.name === 'AbortError') return;
-        await new Promise((r) => setTimeout(r, 1000));
+        if (this.destroyed || err?.name === 'AbortError' || this.activeRung !== 'poll') return;
+        await new Promise((r) => setTimeout(r, 800));
       }
     }
   }
@@ -244,7 +249,7 @@ export class SignalingLadderClient {
 
       this.callbacks.onMessage(envelope);
     } catch {
-      // Ignore or log malformed signaling frames
+      // Ignore malformed frames
     }
   }
 
@@ -264,14 +269,23 @@ export class SignalingLadderClient {
 
   private handleRungFailure(_err: Error) {
     this.cleanupTransports();
-    // Step down ladder
     if (this.activeRung === 'ws') {
+      this.wsTryCount++;
+      if (this.wsTryCount < 2) {
+        // Retry WebSocket once more before stepping down ladder
+        setTimeout(() => {
+          if (!this.destroyed) void this.connect();
+        }, 600);
+        return;
+      }
+      this.wsTryCount = 0;
       this.activeRung = 'sse';
       void this.connect();
     } else if (this.activeRung === 'sse') {
       this.activeRung = 'poll';
       void this.connect();
     } else {
+      this.activeRung = 'ws';
       this.scheduleReconnect();
     }
   }
@@ -279,15 +293,15 @@ export class SignalingLadderClient {
   private scheduleReconnect() {
     if (this.reconnectTimer || this.destroyed) return;
     this.reconnectAttempt++;
-    // Exponential backoff with full jitter: min(RECONNECT_MAX_DELAY_MS, base * 2^attempt) * random
     const maxDelay = Math.min(
       RECONNECT_MAX_DELAY_MS,
-      RECONNECT_BASE_DELAY_MS * Math.pow(1.5, Math.min(this.reconnectAttempt, 8))
+      RECONNECT_BASE_DELAY_MS * Math.pow(1.5, Math.min(this.reconnectAttempt, 6))
     );
     const delay = Math.floor(Math.random() * maxDelay) + RECONNECT_BASE_DELAY_MS;
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      this.activeRung = 'ws';
       void this.connect();
     }, delay);
   }
@@ -317,16 +331,67 @@ export class SignalingLadderClient {
     }
   }
 
+  /**
+   * Non-disruptive background upgrade to WebSocket if currently on SSE or Poll.
+   * Opens a test WebSocket first; only switches over if the WebSocket succeeds!
+   */
   private startRungReattemptTimer() {
     if (this.rungReattemptTimer) return;
     this.rungReattemptTimer = setInterval(() => {
-      // If we are on SSE or Poll, re-attempt higher rung
-      if (this.activeRung !== 'ws' && this.connectionState === 'connected') {
-        this.activeRung = 'ws';
-        this.cleanupTransports();
-        void this.connect();
+      if (this.activeRung !== 'ws' && this.connectionState === 'connected' && !this.destroyed) {
+        this.tryBackgroundWebSocketUpgrade();
       }
     }, TRANSPORT_LADDER_REATTEMPT_MS);
+  }
+
+  private tryBackgroundWebSocketUpgrade() {
+    try {
+      const wsUrl = this.getWebSocketUrl();
+      const candidateWs = new WebSocket(wsUrl);
+      const timer = setTimeout(() => {
+        try {
+          candidateWs.close();
+        } catch {}
+      }, 5000);
+
+      candidateWs.onopen = () => {
+        clearTimeout(timer);
+        if (this.destroyed) {
+          candidateWs.close();
+          return;
+        }
+        // Clean up old SSE/Poll transport and promote candidateWs
+        if (this.sse) {
+          try {
+            this.sse.close();
+          } catch {}
+          this.sse = null;
+        }
+        if (this.pollAbort) {
+          try {
+            this.pollAbort.abort();
+          } catch {}
+          this.pollAbort = null;
+        }
+        this.ws = candidateWs;
+        this.ws.onmessage = (ev) => this.handleIncomingRaw(ev.data);
+        this.ws.onclose = () => {
+          if (!this.destroyed && this.activeRung === 'ws') {
+            this.onConnectionLost();
+          }
+        };
+        this.onConnected('ws');
+      };
+
+      candidateWs.onerror = () => {
+        clearTimeout(timer);
+        try {
+          candidateWs.close();
+        } catch {}
+      };
+    } catch {
+      /* keep current rung */
+    }
   }
 
   private stopRungReattemptTimer() {
@@ -339,15 +404,21 @@ export class SignalingLadderClient {
   private cleanupTransports() {
     this.stopHeartbeat();
     if (this.ws) {
-      try { this.ws.close(); } catch {}
+      try {
+        this.ws.close();
+      } catch {}
       this.ws = null;
     }
     if (this.sse) {
-      try { this.sse.close(); } catch {}
+      try {
+        this.sse.close();
+      } catch {}
       this.sse = null;
     }
     if (this.pollAbort) {
-      try { this.pollAbort.abort(); } catch {}
+      try {
+        this.pollAbort.abort();
+      } catch {}
       this.pollAbort = null;
     }
   }

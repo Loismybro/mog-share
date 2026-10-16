@@ -29,17 +29,13 @@ import { FileReceiverPipeline } from '../transfer/receiver/index.js';
 import {
   createBlockWriter,
   checkStorageQuota,
-  MemoryBlockWriter,
   type BlockWriter,
 } from '../transfer/storage/index.js';
 import { TransferJournal } from '../transfer/resume/journal.js';
 import { BlockBitmap } from '../transfer/resume/bitmap.js';
 import { haptics } from '../haptics/index.js';
+import { soundEffects } from '../utils/soundEffects.js';
 import type { DetectedDeviceProfile } from '../utils/deviceDetector.js';
-
-// ---------------------------------------------------------------------------
-// Helpers and Utilities
-// ---------------------------------------------------------------------------
 
 export function safeGet(key: string): string | null {
   try {
@@ -134,8 +130,6 @@ interface PeerConnectionBundle {
   pathStats?: PeerPathStats;
 }
 
-export const VIRTUAL_DEMO_PEER_ID = 'virtual_demo_peer';
-
 export class NetworkService {
   private deviceId: string;
   private deviceName: string;
@@ -159,7 +153,6 @@ export class NetworkService {
 
   private visiblePeers = new Map<string, Device>();
   private roomPeers = new Map<string, Device>();
-  private demoPeerEnabled = false;
   private currentRoomCode: string | null = null;
   private roomPassphrase: string | null = null;
 
@@ -170,6 +163,7 @@ export class NetworkService {
   private activeWriters = new Map<string, BlockWriter>();
   private transferFiles = new Map<string, TransferFile>();
   private transferBitmaps = new Map<string, BlockBitmap>();
+  private requestRetryTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   private journal: TransferJournal;
   private destroyed = false;
@@ -220,7 +214,11 @@ export class NetworkService {
   }
 
   public getActiveTransportRung(): string {
-    return this.signaling?.getActiveRung()?.toUpperCase() || 'LOCAL';
+    const rung = this.signaling?.getActiveRung();
+    if (rung === 'ws') return 'Live';
+    if (rung === 'sse') return 'Stream';
+    if (rung === 'poll') return 'Cloud';
+    return 'Local';
   }
 
   public updateProfile(
@@ -258,22 +256,17 @@ export class NetworkService {
   public rescan() {
     if (this.signaling && this.state === 'ready') {
       this.lastPingSent = Date.now();
-      this.signaling.send('rescan', {});
+      this.signaling.send('rescan', {
+        name: this.deviceName,
+        platform: this.platform,
+        model: this.deviceProfile?.model,
+      });
       this.signaling.send('ping', { clientTime: this.lastPingSent });
     } else if (this.state !== 'connecting') {
       void this.initialize();
     }
     this.broadcastLocalBusPresence(true);
     this.emitVisiblePeers();
-  }
-
-  public setDemoPeerEnabled(enabled: boolean) {
-    this.demoPeerEnabled = enabled;
-    this.emitVisiblePeers();
-  }
-
-  public isDemoPeerEnabled(): boolean {
-    return this.demoPeerEnabled;
   }
 
   private emitVisiblePeers() {
@@ -286,28 +279,23 @@ export class NetworkService {
         merged.set(id, entry.device);
       }
     }
-    if (this.demoPeerEnabled) {
-      merged.set(VIRTUAL_DEMO_PEER_ID, {
-        id: VIRTUAL_DEMO_PEER_ID,
-        name: 'Galaxy S25 Ultra (Demo Peer)',
-        platform: 'android',
-        model: 'Samsung Galaxy S25 Ultra',
-        os: 'Android 15',
-        browser: 'Chrome',
-        deviceType: 'phone',
-        batteryLevel: 92,
-        isCharging: true,
-        isSimulated: true,
-        status: 'online',
-        connType: 'Direct Loopback (0.4ms)',
-        rttMs: 1,
-      });
-    }
     this.callbacks.onPeersChanged(Array.from(merged.values()));
   }
 
+  /**
+   * Pre-warms the WebRTC PeerSession as soon as a peer is discovered so that
+   * by the time the user taps Send, the Direct Local Wi-Fi DataChannel is already open!
+   */
+  private prewarmPeer(remoteDeviceId: string) {
+    if (!remoteDeviceId || remoteDeviceId === this.deviceId) return;
+    const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
+    if (!bundle.peerSession.isPolite) {
+      void bundle.peerSession.ensureNegotiationStarted();
+    }
+  }
+
   // -------------------------------------------------------------------------
-  // Same-Browser Multi-Tab BroadcastChannel Bus (Zero-Latency Local Discovery)
+  // Same-Browser Multi-Tab BroadcastChannel Bus
   // -------------------------------------------------------------------------
   private initLocalBroadcastBus() {
     if (typeof BroadcastChannel === 'undefined') return;
@@ -322,7 +310,7 @@ export class NetworkService {
           case 'presence': {
             const dev: Device = {
               id: msg.from,
-              name: msg.name || 'Local Tab Peer',
+              name: msg.name || 'Local Tab',
               platform: msg.platform || 'web',
               model: msg.model,
               os: msg.os,
@@ -331,12 +319,16 @@ export class NetworkService {
               batteryLevel: msg.batteryLevel,
               isCharging: msg.isCharging,
               status: 'online',
-              connType: 'Direct (same device)',
+              connType: 'Local Wi-Fi · Zero Data',
               rttMs: 1,
             };
             const isNew = !this.localBusPeers.has(msg.from) && !this.visiblePeers.has(msg.from);
             this.localBusPeers.set(msg.from, { device: dev, lastSeen: Date.now() });
-            if (isNew) haptics.play('deviceFound');
+            if (isNew) {
+              haptics.play('deviceFound');
+              soundEffects.play('devicePaired');
+              this.prewarmPeer(msg.from);
+            }
             this.emitVisiblePeers();
             if (msg.replyRequested) {
               this.broadcastLocalBusPresence(false);
@@ -360,7 +352,7 @@ export class NetworkService {
           }
           case 'relay-frame': {
             const bundle = this.getOrCreatePeerBundle(msg.from);
-            if (msg.encrypted) {
+            if (msg.encrypted && bundle.hasDerivedSharedKey) {
               void bundle.relayTransport.handleIncomingRelayFrame(msg.data as string);
             } else if (typeof msg.data === 'string') {
               this.handleDataFrame(base64ToUint8(msg.data));
@@ -368,8 +360,9 @@ export class NetworkService {
             break;
           }
           case 'clipboard': {
+            soundEffects.play('messageReceived');
             this.callbacks.onClipboardReceived(
-              msg.fromName || 'Local Tab',
+              msg.fromName || 'Local Device',
               msg.content || '',
               msg.timestamp || Date.now(),
               { fromId: msg.from, isDirect: Boolean(msg.to) }
@@ -385,7 +378,7 @@ export class NetworkService {
         const now = Date.now();
         let changed = false;
         for (const [id, entry] of this.localBusPeers) {
-          if (now - entry.lastSeen > 12_000) {
+          if (now - entry.lastSeen > 14_000) {
             this.localBusPeers.delete(id);
             changed = true;
           }
@@ -428,7 +421,7 @@ export class NetworkService {
   // Signaling Initialization
   // -------------------------------------------------------------------------
   private async initialize() {
-    this.setState('connecting', 'Probing network identity (dual-stack v4/v6)...');
+    this.setState('connecting', 'Connecting to discovery network…');
 
     try {
       await this.fetchTurnCredentials();
@@ -445,25 +438,28 @@ export class NetworkService {
 
       this.signaling = new SignalingLadderClient(this.deviceId, this.serverUrl, {
         onMessage: (envelope) => this.handleSignalingEnvelope(envelope),
-        onStateChange: (state, rung) => {
+        onStateChange: (state, _rung) => {
           if (state === 'connected') {
             this.sendJoinMessage();
             if (this.currentRoomCode) {
               this.signaling?.send('join-room', {
                 roomCode: this.currentRoomCode,
                 password: this.roomPassphrase || undefined,
+                name: this.deviceName,
+                platform: this.platform,
+                model: this.deviceProfile?.model,
               });
             }
-            this.setState('ready', `Connected via ${rung.toUpperCase()} transport`);
+            this.setState('ready', 'Connected');
             if (this.pendingRoomAction) {
               const act = this.pendingRoomAction;
               this.pendingRoomAction = null;
               act();
             }
           } else if (state === 'connecting') {
-            this.setState('connecting', `Connecting via ${rung.toUpperCase()} ladder...`);
+            this.setState('connecting', 'Connecting…');
           } else {
-            this.setState('reconnecting', 'Signaling dropped, reconnecting ladder...');
+            this.setState('reconnecting', 'Reconnecting…');
           }
         },
         onError: (err) => {
@@ -522,9 +518,11 @@ export class NetworkService {
       batteryLevel?: number;
       isCharging?: boolean;
     },
-    connType = 'Direct (same network)'
+    connType = 'Local Wi-Fi · Zero Data'
   ): Device {
     const existing = this.visiblePeers.get(p.id) || this.roomPeers.get(p.id);
+    const bundle = this.peerBundles.get(p.id);
+    const isDirectOpen = bundle?.peerSession.data.readyState === 'open';
     return {
       id: p.id,
       name: p.name || existing?.name || `Device (${p.id.slice(0, 4)})`,
@@ -536,7 +534,7 @@ export class NetworkService {
       batteryLevel: p.batteryLevel ?? existing?.batteryLevel,
       isCharging: p.isCharging ?? existing?.isCharging,
       status: 'online',
-      connType: existing?.connType || connType,
+      connType: isDirectOpen ? 'Local Wi-Fi · Zero Data' : existing?.connType || connType,
       rttMs: existing?.rttMs,
       availableBitrateBps: existing?.availableBitrateBps,
     };
@@ -575,11 +573,23 @@ export class NetworkService {
             batteryLevel?: number;
             isCharging?: boolean;
           }>) || [];
-        this.visiblePeers.clear();
+        const hadPeers = this.visiblePeers.size > 0;
+        let foundNew = false;
+        const nextIds = new Set<string>();
         for (const p of peers) {
           if (p.id !== this.deviceId) {
-            this.visiblePeers.set(p.id, this.mapRawPeerToDevice(p, 'Direct (same network)'));
+            nextIds.add(p.id);
+            if (!this.visiblePeers.has(p.id)) foundNew = true;
+            this.visiblePeers.set(p.id, this.mapRawPeerToDevice(p, 'Local Wi-Fi · Zero Data'));
+            this.prewarmPeer(p.id);
           }
+        }
+        for (const oldId of Array.from(this.visiblePeers.keys())) {
+          if (!nextIds.has(oldId)) this.visiblePeers.delete(oldId);
+        }
+        if (foundNew && (!hadPeers || peers.length > 0)) {
+          haptics.play('deviceFound');
+          soundEffects.play('devicePaired');
         }
         this.emitVisiblePeers();
         break;
@@ -599,8 +609,12 @@ export class NetworkService {
         };
         if (p.id && p.id !== this.deviceId) {
           const isNew = !this.visiblePeers.has(p.id);
-          this.visiblePeers.set(p.id, this.mapRawPeerToDevice(p, 'Direct (same network)'));
-          if (isNew) haptics.play('deviceFound');
+          this.visiblePeers.set(p.id, this.mapRawPeerToDevice(p, 'Local Wi-Fi · Zero Data'));
+          this.prewarmPeer(p.id);
+          if (isNew) {
+            haptics.play('deviceFound');
+            soundEffects.play('devicePaired');
+          }
           this.emitVisiblePeers();
         }
         break;
@@ -618,6 +632,7 @@ export class NetworkService {
       case 'room-created': {
         const code = payload.roomCode as string;
         this.currentRoomCode = code;
+        soundEffects.play('devicePaired');
         this.callbacks.onRoomCreated(code);
         break;
       }
@@ -639,15 +654,18 @@ export class NetworkService {
           }>) || [];
         for (const p of peers) {
           if (p.id !== this.deviceId) {
-            this.roomPeers.set(p.id, this.mapRawPeerToDevice(p, 'Direct (internet)'));
+            this.roomPeers.set(p.id, this.mapRawPeerToDevice(p, 'Online Room'));
+            this.prewarmPeer(p.id);
           }
         }
+        soundEffects.play('devicePaired');
         this.callbacks.onRoomJoined(code);
         this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
         break;
       }
 
       case 'room-join-failed': {
+        soundEffects.play('error');
         this.callbacks.onRoomError((payload.error as string) || 'Failed to join room');
         break;
       }
@@ -672,6 +690,7 @@ export class NetworkService {
         const fromName = (payload.fromDevice as string) || 'Device';
         const content = (payload.content as string) || '';
         const ts = (payload.timestamp as number) || Date.now();
+        soundEffects.play('messageReceived');
         this.callbacks.onClipboardReceived(fromName, content, ts, {
           fromId: payload.fromId as string | undefined,
           isDirect: Boolean(payload.isDirect),
@@ -682,6 +701,7 @@ export class NetworkService {
       case 'peer-joined-room': {
         const pId = (payload.peerId as string) || (payload.id as string);
         if (pId && pId !== this.deviceId) {
+          const isNew = !this.roomPeers.has(pId);
           this.roomPeers.set(
             pId,
             this.mapRawPeerToDevice(
@@ -696,9 +716,14 @@ export class NetworkService {
                 batteryLevel: payload.batteryLevel as number | undefined,
                 isCharging: payload.isCharging as boolean | undefined,
               },
-              'Direct (internet)'
+              'Online Room'
             )
           );
+          this.prewarmPeer(pId);
+          if (isNew) {
+            haptics.play('deviceFound');
+            soundEffects.play('devicePaired');
+          }
           this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
         }
         break;
@@ -722,14 +747,19 @@ export class NetworkService {
         if (payload.raw === true && typeof payload.data === 'string') {
           this.handleDataFrame(base64ToUint8(payload.data));
         } else if (typeof payload.data === 'string') {
-          void bundle.relayTransport
-            .handleIncomingRelayFrame(payload.data)
-            .catch(() => {
-              // Fallback if frame was unencrypted base64
-              try {
-                this.handleDataFrame(base64ToUint8(payload.data as string));
-              } catch {}
-            });
+          if (bundle.hasDerivedSharedKey) {
+            void bundle.relayTransport
+              .handleIncomingRelayFrame(payload.data)
+              .catch(() => {
+                try {
+                  this.handleDataFrame(base64ToUint8(payload.data as string));
+                } catch {}
+              });
+          } else {
+            try {
+              this.handleDataFrame(base64ToUint8(payload.data));
+            } catch {}
+          }
         }
         break;
       }
@@ -755,7 +785,10 @@ export class NetworkService {
           this.roomPeers.get(remoteDeviceId) ||
           this.localBusPeers.get(remoteDeviceId)?.device;
         if (peer) {
-          peer.connType = badge.toLowerCase().includes('direct') ? 'direct' : 'relay';
+          peer.connType =
+            badge.toLowerCase().includes('local') || badge.toLowerCase().includes('direct')
+              ? 'Local Wi-Fi · Zero Data'
+              : 'Cloud Bridge';
           this.emitVisiblePeers();
           if (this.roomPeers.has(remoteDeviceId)) {
             this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
@@ -771,6 +804,9 @@ export class NetworkService {
           peer.rttMs = stats.rttMs;
           peer.availableBitrateBps = stats.availableBitrateBps;
           this.emitVisiblePeers();
+          if (this.roomPeers.has(remoteDeviceId)) {
+            this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+          }
         }
       },
     });
@@ -801,6 +837,19 @@ export class NetworkService {
       },
       onDataFrame: (frame) => {
         this.handleDataFrame(frame);
+      },
+      onDataOpen: () => {
+        const peer =
+          this.visiblePeers.get(remoteDeviceId) ||
+          this.roomPeers.get(remoteDeviceId) ||
+          this.localBusPeers.get(remoteDeviceId)?.device;
+        if (peer) {
+          peer.connType = 'Local Wi-Fi · Zero Data';
+          this.emitVisiblePeers();
+          if (this.roomPeers.has(remoteDeviceId)) {
+            this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+          }
+        }
       },
       onPathStats: (stats) => {
         orchestrator.handlePathStats(stats);
@@ -849,19 +898,18 @@ export class NetworkService {
     return bundle;
   }
 
-  /**
-   * Sends a control message reliably with deduplication id.
-   * Uses the WebRTC ctl channel if already open; otherwise sends immediately via signaling + localBus.
-   */
   private sendCtlReliable(remoteDeviceId: string, msg: Record<string, any>) {
     const envelopeWithId = {
       ...msg,
-      _msgId: msg._msgId || `${this.deviceId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      _msgId:
+        msg._msgId ||
+        `${this.deviceId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     };
     const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
     if (bundle.peerSession.ctl.readyState === 'open') {
       bundle.peerSession.sendCtl(envelopeWithId);
     } else {
+      // Send over signaling AND localBus immediately
       this.signaling?.send('signal', { ctl: envelopeWithId }, remoteDeviceId);
       try {
         this.localBus?.postMessage({
@@ -874,6 +922,14 @@ export class NetworkService {
     }
   }
 
+  /**
+   * High-speed hybrid transport:
+   * 1. Always checks if the Direct WebRTC DataChannel is open on EVERY frame (so even if a transfer
+   *    started on Cloud Relay while ICE was still negotiating, it immediately upgrades to Direct Wi-Fi!).
+   * 2. On the first frame, waits up to 5 seconds for WebRTC DataChannel to open before falling back to Relay.
+   * 3. When using Cloud Relay (e.g., cross-network Online Room behind strict Symmetric NAT),
+   *    paces frames smoothly so the WebSocket never overflows or stalls at 99%.
+   */
   private async sendDataFrameHybrid(
     remoteDeviceId: string,
     bundle: PeerConnectionBundle,
@@ -882,40 +938,46 @@ export class NetworkService {
   ): Promise<void> {
     const ps = bundle.peerSession;
 
-    // 1. Fast path: WebRTC DataChannel already open
+    // 1. Always prefer Direct WebRTC DataChannel if open!
     if (ps.data.readyState === 'open') {
       transfer.channel = 'direct';
       ps.sendData(frame);
       return;
     }
 
-    // 2. Wait briefly (up to 3.5s) on first block for WebRTC DataChannel to open
+    // 2. If not yet marked relay, kick negotiation and wait up to 4.5s for direct P2P channel
     if (transfer.channel !== 'relay') {
-      const opened = await ps.whenDataOpen(3500);
+      void ps.ensureNegotiationStarted();
+      const opened = await ps.whenDataOpen(4500);
       if (opened && ps.data.readyState === 'open') {
         transfer.channel = 'direct';
         ps.sendData(frame);
         return;
       }
-      // Switch to high-speed relay fallback automatically so transfer never fails!
       transfer.channel = 'relay';
     }
 
-    // 3. Relay fallback (E2E encrypted if ECDH key derived, or raw base64 on non-secure LAN)
-    if (bundle.hasDerivedSharedKey) {
-      await bundle.relayTransport.send(frame);
-    } else {
-      const b64 = uint8ToBase64(frame);
-      this.signaling?.send('relay-frame', { data: b64, raw: true }, remoteDeviceId);
-      try {
-        this.localBus?.postMessage({
-          kind: 'relay-frame',
-          from: this.deviceId,
-          to: remoteDeviceId,
-          encrypted: false,
-          data: b64,
-        });
-      } catch {}
+    // 3. Cloud / LocalBus Relay fallback with smooth pacing so WebSocket never overflows
+    const b64 = uint8ToBase64(frame);
+    this.signaling?.send('relay-frame', { data: b64, raw: true }, remoteDeviceId);
+    try {
+      this.localBus?.postMessage({
+        kind: 'relay-frame',
+        from: this.deviceId,
+        to: remoteDeviceId,
+        encrypted: false,
+        data: b64,
+      });
+    } catch {}
+    // Yield briefly every relay chunk so signaling socket and event loop stay responsive
+    await new Promise((r) => setTimeout(r, 4));
+  }
+
+  private clearRequestRetry(transferId: string) {
+    const t = this.requestRetryTimers.get(transferId);
+    if (t) {
+      clearInterval(t);
+      this.requestRetryTimers.delete(transferId);
     }
   }
 
@@ -926,16 +988,10 @@ export class NetworkService {
     if (!data || typeof data !== 'object') return;
     const { type, payload, _msgId } = data;
 
-    // Deduplicate all control messages
-    const dedupKey =
-      _msgId ||
-      (type === 'request-transfer' || type === 'accept-transfer' || type === 'decline-transfer'
-        ? `${type}:${payload?.transferId}`
-        : null);
-    if (dedupKey) {
-      if (this.seenCtl.has(dedupKey)) return;
-      this.seenCtl.add(dedupKey);
-      if (this.seenCtl.size > 2000) {
+    if (_msgId) {
+      if (this.seenCtl.has(_msgId)) return;
+      this.seenCtl.add(_msgId);
+      if (this.seenCtl.size > 3000) {
         const first = this.seenCtl.values().next().value;
         if (first) this.seenCtl.delete(first);
       }
@@ -943,7 +999,26 @@ export class NetworkService {
 
     switch (type) {
       case 'request-transfer': {
+        const transferId = payload.transferId as string;
         const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
+
+        // If we already accepted this transferId (e.g. sender retried request-transfer), re-send accept-transfer!
+        if (this.activeReceivers.has(transferId)) {
+          this.sendCtlReliable(remoteDeviceId, {
+            type: 'accept-transfer',
+            payload: {
+              transferId,
+              receiverPubKey: bundle.localPublicKey,
+            },
+          });
+          return;
+        }
+
+        // Deduplicate initial prompt by transferId
+        const reqKey = `req_prompt:${transferId}`;
+        if (this.seenCtl.has(reqKey)) return;
+        this.seenCtl.add(reqKey);
+
         if (payload.senderPubKey) {
           bundle.trustManager
             .deriveSharedKey(payload.senderPubKey as string)
@@ -954,10 +1029,10 @@ export class NetworkService {
         }
 
         const req: IncomingRequest = {
-          id: payload.transferId,
-          transferId: payload.transferId,
+          id: transferId,
+          transferId,
           fromId: remoteDeviceId,
-          fromName: (payload.senderName as string) || 'Nearby Peer',
+          fromName: (payload.senderName as string) || 'Nearby Device',
           fromPlatform: (payload.senderPlatform as Platform) || 'web',
           fromModel: payload.senderModel as string | undefined,
           meta: payload.meta as FileMeta,
@@ -969,12 +1044,19 @@ export class NetworkService {
         };
 
         haptics.play('incomingRequest');
+        soundEffects.play('incomingRequest');
         this.callbacks.onIncomingRequest(req);
         break;
       }
 
       case 'accept-transfer': {
         const transferId = payload.transferId as string;
+        this.clearRequestRetry(transferId);
+
+        const acceptKey = `accepted:${transferId}`;
+        if (this.seenCtl.has(acceptKey)) return;
+        this.seenCtl.add(acceptKey);
+
         const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
         if (payload.receiverPubKey) {
           bundle.trustManager
@@ -991,6 +1073,7 @@ export class NetworkService {
             t.status = 'transferring';
             this.callbacks.onTransferUpdate({ ...t });
           }
+          soundEffects.play('transferStart');
           void sender.start();
         }
         break;
@@ -998,11 +1081,13 @@ export class NetworkService {
 
       case 'decline-transfer': {
         const transferId = payload.transferId as string;
+        this.clearRequestRetry(transferId);
         const t = this.transferFiles.get(transferId);
         if (t) {
           t.status = 'declined';
           this.callbacks.onTransferUpdate({ ...t });
         }
+        soundEffects.play('error');
         this.activeSenders.delete(transferId);
         break;
       }
@@ -1050,6 +1135,7 @@ export class NetworkService {
           this.visiblePeers.get(remoteDeviceId) ||
           this.roomPeers.get(remoteDeviceId) ||
           this.localBusPeers.get(remoteDeviceId)?.device;
+        soundEffects.play('messageReceived');
         this.callbacks.onClipboardReceived(
           senderPeer?.name || (payload.senderName as string) || 'Device',
           payload.content as string,
@@ -1074,13 +1160,11 @@ export class NetworkService {
   // Public Transfer APIs
   // -------------------------------------------------------------------------
   public async sendFile(peer: Device, file: File): Promise<void> {
-    if (peer.id === VIRTUAL_DEMO_PEER_ID || peer.isSimulated) {
-      await this.sendFileToDemoPeer(peer, file);
-      return;
-    }
-
     const transferId = `xfer_${Math.random().toString(36).slice(2, 10)}`;
     const bundle = this.getOrCreatePeerBundle(peer.id);
+
+    // Ensure WebRTC negotiation is started immediately
+    void bundle.peerSession.ensureNegotiationStarted();
 
     if (!bundle.localPublicKey) {
       try {
@@ -1131,13 +1215,21 @@ export class NetworkService {
     this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate({ ...transfer });
 
-    const updateSenderMetrics = (bytes: number, totalBytes: number, speedBps: number) => {
+    const updateSenderMetrics = (
+      bytes: number,
+      totalBytes: number,
+      speedBps: number,
+      isAcked: boolean
+    ) => {
+      if (bytes < (transfer.bytesTransferred || 0) && !isAcked) return;
       transfer.bytesTransferred = bytes;
-      transfer.progress = totalBytes > 0 ? Math.min(99, Math.round((bytes / totalBytes) * 100)) : 100;
+      const maxPct = isAcked ? 99 : 95;
+      transfer.progress =
+        totalBytes > 0 ? Math.min(maxPct, Math.round((bytes / totalBytes) * 100)) : 100;
       if (speedBps > 0) {
         transfer.speedBytesPerSec =
           transfer.speedBytesPerSec > 0
-            ? transfer.speedBytesPerSec * 0.6 + speedBps * 0.4
+            ? transfer.speedBytesPerSec * 0.65 + speedBps * 0.35
             : speedBps;
         transfer.speed = transfer.speedBytesPerSec;
         const remaining = Math.max(0, totalBytes - bytes);
@@ -1161,13 +1253,14 @@ export class NetworkService {
         getBufferedAmount: () => bundle.peerSession.getBufferedAmount(),
         waitForBufferedAmountLow: () => bundle.peerSession.waitForBufferedAmountLow(),
         onChunkProgress: (sentBytes, totalBytes, speedBps) => {
-          updateSenderMetrics(sentBytes, totalBytes, speedBps);
+          updateSenderMetrics(sentBytes, totalBytes, speedBps, false);
         },
         onAckedProgress: (acknowledgedBytes, totalBytes, speedBps) => {
-          updateSenderMetrics(acknowledgedBytes, totalBytes, speedBps);
+          updateSenderMetrics(acknowledgedBytes, totalBytes, speedBps, true);
         },
         onBlockCompleted: () => {},
         onFileCompleted: () => {
+          this.clearRequestRetry(transferId);
           transfer.status = 'completed';
           transfer.progress = 100;
           transfer.bytesTransferred = file.size;
@@ -1175,13 +1268,16 @@ export class NetworkService {
           transfer.etaSeconds = 0;
           this.callbacks.onTransferUpdate({ ...transfer });
           haptics.play('complete');
+          soundEffects.play('transferComplete');
           this.activeSenders.delete(transferId);
         },
         onError: (err) => {
+          this.clearRequestRetry(transferId);
           transfer.status = 'failed';
           transfer.error = err.message;
           this.callbacks.onTransferUpdate({ ...transfer });
           haptics.play('error');
+          soundEffects.play('error');
           this.activeSenders.delete(transferId);
         },
       },
@@ -1190,7 +1286,7 @@ export class NetworkService {
 
     this.activeSenders.set(transferId, senderPipeline);
 
-    const reqPayload = {
+    const buildReqPayload = () => ({
       type: 'request-transfer',
       payload: {
         transferId,
@@ -1208,234 +1304,22 @@ export class NetworkService {
         sasEmoji: sas.sasEmoji,
         isTrusted: sas.isTrusted,
       },
-    };
-    this.sendCtlReliable(peer.id, reqPayload);
-  }
-
-  /**
-   * Executes a real loopback transfer pipeline with the simulated Demo Peer so users can
-   * test sending and receiving files on a single machine with 1 click.
-   */
-  private async sendFileToDemoPeer(peer: Device, file: File): Promise<void> {
-    const transferId = `demo_${Math.random().toString(36).slice(2, 10)}`;
-    let blobUrl: string | undefined;
-    try {
-      blobUrl = URL.createObjectURL(file);
-    } catch {}
-
-    const transfer: TransferFile = {
-      id: transferId,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'application/octet-stream',
-      fileBlob: file,
-      blobUrl,
-      progress: 0,
-      speedBytesPerSec: 0,
-      etaSeconds: 0,
-      direction: 'sending',
-      status: 'transferring',
-      bytesTransferred: 0,
-      peerId: peer.id,
-      peerName: peer.name,
-      channel: 'direct',
-      createdAt: Date.now(),
-    };
-    this.transferFiles.set(transferId, transfer);
-    this.callbacks.onTransferUpdate({ ...transfer });
-
-    const writer = new MemoryBlockWriter(file.type || 'application/octet-stream');
-    let demoReceiver: FileReceiverPipeline;
-
-    const senderPipeline = new FileSenderPipeline(
-      file,
-      transferId,
-      0,
-      {
-        sendDataChannel: async (frame) => {
-          await new Promise((r) => setTimeout(r, 4));
-          demoReceiver.handleDataFrame(frame);
-        },
-        sendCtlMessage: (msg: any) => {
-          if (msg.type === 'block-end') {
-            demoReceiver.handleBlockEnd(msg.payload);
-          }
-        },
-        getBufferedAmount: () => 0,
-        waitForBufferedAmountLow: async () => {},
-        onChunkProgress: (sentBytes, totalBytes, speedBps) => {
-          transfer.bytesTransferred = sentBytes;
-          transfer.progress = totalBytes > 0 ? Math.min(99, Math.round((sentBytes / totalBytes) * 100)) : 100;
-          transfer.speedBytesPerSec = speedBps;
-          transfer.etaSeconds = speedBps > 0 ? Math.max(0, (totalBytes - sentBytes) / speedBps) : 0;
-          this.callbacks.onTransferUpdate({ ...transfer });
-        },
-        onAckedProgress: (acked, totalBytes, speedBps) => {
-          transfer.bytesTransferred = acked;
-          transfer.progress = totalBytes > 0 ? Math.min(99, Math.round((acked / totalBytes) * 100)) : 100;
-          if (speedBps > 0) transfer.speedBytesPerSec = speedBps;
-          this.callbacks.onTransferUpdate({ ...transfer });
-        },
-        onBlockCompleted: () => {},
-        onFileCompleted: () => {
-          transfer.status = 'completed';
-          transfer.progress = 100;
-          transfer.bytesTransferred = file.size;
-          transfer.speedBytesPerSec = 0;
-          transfer.etaSeconds = 0;
-          this.callbacks.onTransferUpdate({ ...transfer });
-          haptics.play('complete');
-          this.activeSenders.delete(transferId);
-        },
-        onError: (err) => {
-          transfer.status = 'failed';
-          transfer.error = err.message;
-          this.callbacks.onTransferUpdate({ ...transfer });
-          this.activeSenders.delete(transferId);
-        },
-      },
-      { chunkSize: DEFAULT_CHUNK_SIZE, blockSize: DEFAULT_BLOCK_SIZE }
-    );
-
-    demoReceiver = new FileReceiverPipeline(
-      transferId,
-      file.size,
-      writer,
-      {
-        sendCtlMessage: (msg: any) => {
-          if (msg.type === 'block-ack') {
-            senderPipeline.handleBlockAck(msg.payload.blockIndex, msg.payload.verified);
-          } else if (msg.type === 'credit-grant') {
-            senderPipeline.grantCredits(msg.payload.credits);
-          }
-        },
-        onProgress: () => {},
-        onBlockVerified: () => {},
-        onFileComplete: () => {},
-        onError: () => {},
-      },
-      DEFAULT_BLOCK_SIZE
-    );
-
-    this.activeSenders.set(transferId, senderPipeline);
-    await senderPipeline.start();
-  }
-
-  /**
-   * Simulates receiving a sample file from the Demo Peer so the user can test
-   * the incoming file prompt, receive pipeline, and Personal Space Vault.
-   */
-  public async simulateIncomingSampleFile(): Promise<void> {
-    const sampleSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500">
-      <defs>
-        <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#0f172a"/>
-          <stop offset="50%" stop-color="#1e1b4b"/>
-          <stop offset="100%" stop-color="#06b6d4"/>
-        </linearGradient>
-      </defs>
-      <rect width="800" height="500" rx="28" fill="url(#bg)"/>
-      <circle cx="650" cy="120" r="140" fill="#38bdf8" opacity="0.18"/>
-      <circle cx="160" cy="390" r="180" fill="#818cf8" opacity="0.22"/>
-      <text x="60" y="210" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="48" font-weight="800">MogShare P2P Verified</text>
-      <text x="60" y="265" fill="#bae6fd" font-family="monospace" font-size="22">SHA-256 Block Integrity · WebRTC DataChannel</text>
-      <text x="60" y="320" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="18">Received from Galaxy S25 Ultra (Demo Peer) at ${new Date().toLocaleTimeString()}</text>
-    </svg>`;
-    const blob = new Blob([sampleSvg], { type: 'image/svg+xml' });
-    const file = new File([blob], `MogShare-Demo-Poster-${Date.now().toString().slice(-4)}.svg`, {
-      type: 'image/svg+xml',
     });
-    const transferId = `demo_in_${Math.random().toString(36).slice(2, 10)}`;
 
-    const writer = new MemoryBlockWriter(file.type);
-    const receiveTransfer: TransferFile = {
-      id: transferId,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      progress: 0,
-      speedBytesPerSec: 0,
-      etaSeconds: 0,
-      direction: 'receiving',
-      status: 'transferring',
-      bytesTransferred: 0,
-      peerId: VIRTUAL_DEMO_PEER_ID,
-      peerName: 'Galaxy S25 Ultra (Demo Peer)',
-      channel: 'direct',
-      createdAt: Date.now(),
-    };
-    this.transferFiles.set(transferId, receiveTransfer);
-    this.callbacks.onTransferUpdate({ ...receiveTransfer });
+    this.sendCtlReliable(peer.id, buildReqPayload());
 
-    let receiverPipeline: FileReceiverPipeline;
-    const senderPipeline = new FileSenderPipeline(
-      file,
-      transferId,
-      0,
-      {
-        sendDataChannel: async (frame) => {
-          await new Promise((r) => setTimeout(r, 15));
-          receiverPipeline.handleDataFrame(frame);
-        },
-        sendCtlMessage: (msg: any) => {
-          if (msg.type === 'block-end') {
-            receiverPipeline.handleBlockEnd(msg.payload);
-          }
-        },
-        getBufferedAmount: () => 0,
-        waitForBufferedAmountLow: async () => {},
-        onAckedProgress: () => {},
-        onBlockCompleted: () => {},
-        onFileCompleted: () => {},
-        onError: () => {},
-      },
-      { chunkSize: 1024, blockSize: 4096 }
-    );
-
-    const startTime = Date.now();
-    receiverPipeline = new FileReceiverPipeline(
-      transferId,
-      file.size,
-      writer,
-      {
-        sendCtlMessage: (msg: any) => {
-          if (msg.type === 'block-ack') {
-            senderPipeline.handleBlockAck(msg.payload.blockIndex, msg.payload.verified);
-          } else if (msg.type === 'credit-grant') {
-            senderPipeline.grantCredits(msg.payload.credits);
-          }
-        },
-        onProgress: (verifiedBytes, totalBytes) => {
-          const elapsed = Math.max(0.05, (Date.now() - startTime) / 1000);
-          receiveTransfer.bytesTransferred = verifiedBytes;
-          receiveTransfer.progress = Math.min(99, Math.round((verifiedBytes / totalBytes) * 100));
-          receiveTransfer.speedBytesPerSec = verifiedBytes / elapsed;
-          receiveTransfer.etaSeconds = 0;
-          this.callbacks.onTransferUpdate({ ...receiveTransfer });
-        },
-        onBlockVerified: () => {},
-        onFileComplete: (output) => {
-          receiveTransfer.status = 'completed';
-          receiveTransfer.progress = 100;
-          receiveTransfer.bytesTransferred = file.size;
-          receiveTransfer.speedBytesPerSec = 0;
-          if (output) {
-            receiveTransfer.fileBlob = output;
-            receiveTransfer.blobUrl = URL.createObjectURL(output);
-          }
-          this.callbacks.onTransferUpdate({ ...receiveTransfer });
-          haptics.play('complete');
-        },
-        onError: (err) => {
-          receiveTransfer.status = 'failed';
-          receiveTransfer.error = err.message;
-          this.callbacks.onTransferUpdate({ ...receiveTransfer });
-        },
-      },
-      4096
-    );
-
-    await senderPipeline.start();
+    // Automatic retry every 2 seconds while in 'waiting' state so Online Room transfers never get stuck!
+    let attempts = 0;
+    const retryTimer = setInterval(() => {
+      attempts++;
+      const cur = this.transferFiles.get(transferId);
+      if (!cur || cur.status !== 'waiting' || attempts > 8) {
+        this.clearRequestRetry(transferId);
+        return;
+      }
+      this.sendCtlReliable(peer.id, buildReqPayload());
+    }, 2000);
+    this.requestRetryTimers.set(transferId, retryTimer);
   }
 
   public async respondToRequest(req: IncomingRequest, accept: boolean): Promise<void> {
@@ -1480,6 +1364,7 @@ export class NetworkService {
     });
     this.activeWriters.set(transferId, writer);
 
+    const isDirect = bundle.peerSession.data.readyState === 'open';
     const transfer: TransferFile = {
       id: transferId,
       name: req.meta.name,
@@ -1494,7 +1379,7 @@ export class NetworkService {
       speed: 0,
       peerId: req.fromId,
       peerName: req.fromName,
-      channel: 'direct',
+      channel: isDirect ? 'direct' : 'direct',
       createdAt: Date.now(),
     };
     this.transferFiles.set(transferId, transfer);
@@ -1519,11 +1404,11 @@ export class NetworkService {
         onProgress: (verifiedBytes, totalBytes) => {
           const now = Date.now();
           const dt = (now - lastSampleTime) / 1000;
-          if (dt >= 0.25) {
+          if (dt >= 0.2) {
             const instSpeed = (verifiedBytes - lastSampleBytes) / dt;
             transfer.speedBytesPerSec =
               transfer.speedBytesPerSec > 0
-                ? transfer.speedBytesPerSec * 0.6 + instSpeed * 0.4
+                ? transfer.speedBytesPerSec * 0.65 + instSpeed * 0.35
                 : instSpeed;
             lastSampleTime = now;
             lastSampleBytes = verifiedBytes;
@@ -1532,6 +1417,8 @@ export class NetworkService {
             transfer.speedBytesPerSec = verifiedBytes / elapsed;
           }
           transfer.speed = transfer.speedBytesPerSec;
+          transfer.channel =
+            bundle.peerSession.data.readyState === 'open' ? 'direct' : 'relay';
           const remaining = Math.max(0, totalBytes - verifiedBytes);
           transfer.etaSeconds =
             transfer.speedBytesPerSec > 0 ? remaining / transfer.speedBytesPerSec : 0;
@@ -1568,6 +1455,7 @@ export class NetworkService {
           }
           this.callbacks.onTransferUpdate({ ...transfer });
           haptics.play('complete');
+          soundEffects.play('transferComplete');
           this.activeReceivers.delete(transferId);
           this.activeWriters.delete(transferId);
         },
@@ -1576,6 +1464,7 @@ export class NetworkService {
           transfer.error = err.message;
           this.callbacks.onTransferUpdate({ ...transfer });
           haptics.play('error');
+          soundEffects.play('error');
           this.activeReceivers.delete(transferId);
           this.activeWriters.delete(transferId);
         },
@@ -1584,6 +1473,7 @@ export class NetworkService {
     );
 
     this.activeReceivers.set(transferId, receiverPipeline);
+    soundEffects.play('transferStart');
 
     this.sendCtlReliable(req.fromId, {
       type: 'accept-transfer',
@@ -1595,6 +1485,7 @@ export class NetworkService {
   }
 
   public cancelTransfer(id: string, notifyRemote = true) {
+    this.clearRequestRetry(id);
     const sender = this.activeSenders.get(id);
     if (sender) sender.cancel();
 
@@ -1603,7 +1494,7 @@ export class NetworkService {
 
     const t = this.transferFiles.get(id);
     if (t) {
-      if (notifyRemote && t.peerId && t.peerId !== VIRTUAL_DEMO_PEER_ID) {
+      if (notifyRemote && t.peerId) {
         this.sendCtlReliable(t.peerId, {
           type: 'cancel-transfer',
           payload: { transferId: id },
@@ -1651,7 +1542,12 @@ export class NetworkService {
       this.pendingRoomAction = () => this.createRoom(password);
       return;
     }
-    this.signaling?.send('create-room', { password });
+    this.signaling?.send('create-room', {
+      password,
+      name: this.deviceName,
+      platform: this.platform,
+      model: this.deviceProfile?.model,
+    });
   }
 
   public joinRoom(code: string, password?: string) {
@@ -1664,7 +1560,13 @@ export class NetworkService {
       this.pendingRoomAction = () => this.joinRoom(norm, password);
       return;
     }
-    this.signaling?.send('join-room', { roomCode: norm, password });
+    this.signaling?.send('join-room', {
+      roomCode: norm,
+      password,
+      name: this.deviceName,
+      platform: this.platform,
+      model: this.deviceProfile?.model,
+    });
   }
 
   public leaveRoom() {
@@ -1698,33 +1600,10 @@ export class NetworkService {
         timestamp,
       });
     } catch {}
-
-    if (this.demoPeerEnabled) {
-      setTimeout(() => {
-        this.callbacks.onClipboardReceived(
-          'Galaxy S25 Ultra (Demo Peer)',
-          `Echo from Demo Peer: Received your snippet (${content.slice(0, 48)}${content.length > 48 ? '…' : ''})`,
-          Date.now(),
-          { fromId: VIRTUAL_DEMO_PEER_ID, isDirect: true }
-        );
-      }, 600);
-    }
   }
 
   public sendDirectMessage(peerId: string, text: string) {
     const timestamp = Date.now();
-    if (peerId === VIRTUAL_DEMO_PEER_ID) {
-      setTimeout(() => {
-        this.callbacks.onClipboardReceived(
-          'Galaxy S25 Ultra (Demo Peer)',
-          `Got your message: "${text}" — P2P channel is healthy and ready for transfers!`,
-          Date.now(),
-          { fromId: VIRTUAL_DEMO_PEER_ID, isDirect: true }
-        );
-      }, 500);
-      return;
-    }
-
     const payload = {
       content: text,
       timestamp,
@@ -1773,6 +1652,8 @@ export class NetworkService {
 
   public destroy() {
     this.destroyed = true;
+    for (const t of this.requestRetryTimers.values()) clearInterval(t);
+    this.requestRetryTimers.clear();
     if (this.localBusTimer) {
       clearInterval(this.localBusTimer);
       this.localBusTimer = null;

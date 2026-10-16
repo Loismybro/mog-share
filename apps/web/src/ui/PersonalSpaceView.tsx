@@ -133,14 +133,14 @@ export function PersonalSpaceView(props: {
         size: f.size,
         type: f.type || 'application/octet-stream',
         category: detectFileCategory(f.name, f.type),
-        senderName: 'Local Import',
+        senderName: 'This Device',
         receivedAt: Date.now(),
         blob: f,
       });
       count++;
     }
     props.onRefresh();
-    props.pushToast('success', `Imported ${count} file${count > 1 ? 's' : ''} into Personal Space Vault`);
+    props.pushToast('success', `Added ${count} file${count > 1 ? 's' : ''} to Saved Files`);
     if (importInputRef.current) importInputRef.current.value = '';
   };
 
@@ -158,7 +158,7 @@ export function PersonalSpaceView(props: {
     setSelectedIds(new Set());
     setIsSelectMode(false);
     props.onRefresh();
-    props.pushToast('info', `Removed ${selectedIds.size} files from Vault`);
+    props.pushToast('info', `Removed ${selectedIds.size} files`);
   };
 
   const handleDownloadSingle = (item: PersonalSpaceItem) => {
@@ -215,7 +215,7 @@ export function PersonalSpaceView(props: {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `MogShare-Vault-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `MogShare-Files-${new Date().toISOString().slice(0, 10)}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -234,9 +234,9 @@ export function PersonalSpaceView(props: {
     { key: 'all', label: 'All Files', icon: <Layers size={14} /> },
     { key: 'images', label: 'Photos', icon: <ImageIcon size={14} /> },
     { key: 'videos', label: 'Videos', icon: <Film size={14} /> },
-    { key: 'audio', label: 'Music', icon: <Music size={14} /> },
+    { key: 'audio', label: 'Audio', icon: <Music size={14} /> },
     { key: 'documents', label: 'Docs', icon: <FileText size={14} /> },
-    { key: 'apps', label: 'APKs & Apps', icon: <Box size={14} /> },
+    { key: 'apps', label: 'Apps', icon: <Box size={14} /> },
     { key: 'archives', label: 'Archives', icon: <Archive size={14} /> },
   ];
 
@@ -261,21 +261,20 @@ export function PersonalSpaceView(props: {
 
   return (
     <div className="personal-space-view">
-      {/* Header */}
       <div className="section-header-row">
         <div>
-          <h1 className="view-title">Personal Space Vault</h1>
+          <h1 className="view-title">Saved Files</h1>
           <p className="view-sub">
-            Persistent browser vault for received files — preview media, inspect APKs/code, or re-share to peers.
+            Received files are stored locally on your device so you can preview, download, or share them anytime.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
             className="btn btn-sm btn-primary"
             onClick={() => importInputRef.current?.click()}
-            title="Import files from your device into Personal Space"
+            title="Add files from your device"
           >
-            <Plus size={15} /> Import Files
+            <Plus size={15} /> Add Files
           </button>
           {items.length > 0 && (
             <>
@@ -291,9 +290,9 @@ export function PersonalSpaceView(props: {
               <button
                 className="btn btn-sm btn-secondary"
                 onClick={() => void handleExportZip(items)}
-                title="Download entire vault as ZIP"
+                title="Download all saved files as ZIP"
               >
-                <Archive size={14} /> Export ZIP
+                <Archive size={14} /> Download All as ZIP
               </button>
             </>
           )}
@@ -308,21 +307,19 @@ export function PersonalSpaceView(props: {
         onChange={(e) => void handleImportFiles(e.target.files)}
       />
 
-      {/* Storage Overview Card */}
       <div className="card storage-banner">
         <div className="storage-top">
           <div className="storage-stat">
             <span className="field-label" style={{ marginTop: 0 }}>
-              LOCAL INDEXEDDB VAULT STORAGE
+              Saved on This Device
             </span>
             <span className="storage-number mono">{formatBytes(stats.totalBytes)}</span>
           </div>
           <div className="storage-count-pill mono">
-            {items.length} {items.length === 1 ? 'stored item' : 'stored items'}
+            {items.length} {items.length === 1 ? 'file' : 'files'}
           </div>
         </div>
 
-        {/* Category Filter Chips */}
         <div className="category-pill-row">
           {categories.map((cat) => {
             const count = cat.key === 'all' ? items.length : stats.catCounts[cat.key] || 0;
@@ -342,7 +339,6 @@ export function PersonalSpaceView(props: {
         </div>
       </div>
 
-      {/* Search & Sort Toolbar */}
       {items.length > 0 && (
         <div className="vault-toolbar">
           <div className="search-box">
@@ -350,7 +346,7 @@ export function PersonalSpaceView(props: {
             <input
               type="text"
               className="input search-input"
-              placeholder="Search files by name or sender device…"
+              placeholder="Search saved files…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
@@ -372,7 +368,6 @@ export function PersonalSpaceView(props: {
         </div>
       )}
 
-      {/* Multi-Select Bulk Action Bar */}
       {isSelectMode && (
         <div className="card bulk-action-bar">
           <span className="font-bold small">
@@ -405,28 +400,19 @@ export function PersonalSpaceView(props: {
         </div>
       )}
 
-      {/* Vault Items Grid */}
       {filteredItems.length === 0 ? (
         <div className="card empty-vault">
           <div className="empty-vault-icon">
-            <HardDrive size={30} />
+            <HardDrive size={28} />
           </div>
           <h3 className="font-bold" style={{ margin: 0 }}>
-            {items.length === 0 ? 'Your Personal Space Vault is Empty' : 'No Matching Files Found'}
+            {items.length === 0 ? 'No Saved Files Yet' : 'No Matching Files'}
           </h3>
-          <p className="muted small center" style={{ maxWidth: 420, margin: 0 }}>
+          <p className="muted small center" style={{ maxWidth: 400, margin: 0 }}>
             {items.length === 0
-              ? 'Files you receive from nearby devices or rooms are automatically preserved here, or you can import local files directly.'
-              : 'Try clearing your search query or switching the category filter above.'}
+              ? 'Files you receive from other devices are automatically saved here for easy viewing and downloading.'
+              : 'Try clearing your search or selecting All Files above.'}
           </p>
-          {items.length === 0 && (
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={() => importInputRef.current?.click()}
-            >
-              <Plus size={15} /> Import Local Files to Vault
-            </button>
-          )}
         </div>
       ) : (
         <div className="vault-grid">
@@ -450,7 +436,7 @@ export function PersonalSpaceView(props: {
                     }}
                     aria-label={isSelected ? 'Deselect file' : 'Select file'}
                   >
-                    {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+                    {isSelected ? <CheckSquare size={15} /> : <Square size={15} />}
                   </button>
                 )}
 
@@ -472,14 +458,13 @@ export function PersonalSpaceView(props: {
                     <span>·</span>
                     <span>{new Date(item.receivedAt).toLocaleDateString()}</span>
                   </div>
-                  <div className="vault-file-sender">From: {item.senderName || 'Peer'}</div>
+                  <div className="vault-file-sender">From: {item.senderName || 'Device'}</div>
                 </div>
 
                 <div className="vault-file-actions" onClick={(e) => e.stopPropagation()}>
                   <button
                     className="btn btn-xs btn-primary flex-1"
                     onClick={() => props.onOpenFile(item)}
-                    title="Preview file"
                   >
                     <Eye size={13} /> Open
                   </button>
@@ -494,7 +479,7 @@ export function PersonalSpaceView(props: {
                     <button
                       className="btn btn-xs btn-secondary"
                       onClick={() => props.onSendToPeer(peers[0], item.blob!, item.name)}
-                      title={`Forward to ${peers[0].name}`}
+                      title={`Send to ${peers[0].name}`}
                     >
                       <Share2 size={13} />
                     </button>
@@ -511,7 +496,7 @@ export function PersonalSpaceView(props: {
                   <button
                     className="btn btn-xs btn-danger"
                     onClick={() => void handleDeleteItem(item)}
-                    title="Delete from Vault"
+                    title="Delete"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -529,10 +514,10 @@ export function PersonalSpaceView(props: {
             onClick={async () => {
               await clearPersonalSpace();
               props.onRefresh();
-              props.pushToast('info', 'Personal Space Vault cleared');
+              props.pushToast('info', 'Saved files cleared');
             }}
           >
-            <Trash2 size={14} /> Clear Entire Vault
+            <Trash2 size={14} /> Clear All Saved Files
           </button>
         </div>
       )}

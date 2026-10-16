@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import {
   ArrowDownLeft,
-  Radio,
   Wifi,
   HardDrive,
   Copy,
@@ -10,7 +9,6 @@ import {
   X,
   Share2,
   Sparkles,
-  Download,
 } from 'lucide-react';
 
 export function ReceiveModal(props: {
@@ -21,7 +19,6 @@ export function ReceiveModal(props: {
   autoAcceptNearby: boolean;
   onToggleAutoAccept: () => void;
   onGoVault: () => void;
-  onSimulateIncoming?: () => void;
   buildRoomLink: (code: string) => Promise<string>;
   pushToast: (kind: 'success' | 'error' | 'info', msg: string) => void;
 }) {
@@ -85,7 +82,7 @@ export function ReceiveModal(props: {
       await navigator.clipboard.writeText(link || props.roomCode || '');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      props.pushToast('success', 'Connection URL copied to clipboard!');
+      props.pushToast('success', 'Link copied to clipboard');
     } catch {
       props.pushToast('error', 'Failed to copy link');
     }
@@ -96,15 +93,13 @@ export function ReceiveModal(props: {
       <div
         className="modal receive-mode-modal"
         role="dialog"
-        aria-label="Receive Beacon Mode"
+        aria-label="Receive Files"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
           <div className="flex items-center gap-2">
-            <span className="badge badge-cyan">
-              <Radio size={13} className="pulse-icon" /> RECEIVE BEACON ACTIVE
-            </span>
-            <h2>Ready to Receive</h2>
+            <span className="badge badge-emerald">Listening</span>
+            <h2>Ready to Receive Files</h2>
           </div>
           <button className="icon-btn" onClick={props.onClose} aria-label="Close">
             <X size={18} />
@@ -112,51 +107,49 @@ export function ReceiveModal(props: {
         </div>
 
         <div className="receive-mode-body">
-          {/* Animated Receiving Sonar Beacon */}
           <div className="receive-beacon-card">
             <div className="receive-beacon-sonar">
               <div className="beacon-ring ring-a" />
               <div className="beacon-ring ring-b" />
               <div className="beacon-ring ring-c" />
               <div className="beacon-avatar">
-                <ArrowDownLeft size={26} />
+                <ArrowDownLeft size={24} />
               </div>
             </div>
             <div className="receive-beacon-info">
               <h3 className="beacon-title">{props.deviceName}</h3>
               <p className="beacon-desc">
-                Auto-discoverable to all devices on Wi-Fi, Hotspot & Active Room
+                Visible to nearby devices on your Wi-Fi, Hotspot, or active Online Room
               </p>
-              <div className="beacon-status-pill mono">
+              <div className="beacon-status-pill">
                 <span className="beacon-dot" />
-                <span>LISTENING FOR INCOMING P2P STREAMS</span>
+                <span>Waiting for incoming files…</span>
               </div>
             </div>
           </div>
 
-          {/* QR Code & PIN Room connection */}
           <div className="receive-connect-card">
             <div className="receive-qr-left">
               {qrUrl ? (
                 <img
                   src={qrUrl}
-                  alt="QR code for sender device"
+                  alt="QR code to connect and send files"
                   className="receive-qr-img"
-                  width={148}
-                  height={148}
+                  width={144}
+                  height={144}
                 />
               ) : (
-                <div className="receive-qr-placeholder mono small muted">Generating QR…</div>
+                <div className="receive-qr-placeholder small muted">Generating QR…</div>
               )}
             </div>
 
             <div className="receive-connect-details">
-              <h4 className="font-bold text-sm">Instant Camera / URL Pair</h4>
+              <h4 className="font-bold text-sm">Scan QR Code from Sender Device</h4>
               <p className="small muted">
-                Scan this QR code from any phone or open the link below to send files directly to this device:
+                Point the other phone or tablet's camera at this QR code, or open this address:
               </p>
               <div className="receive-pin-box mono">
-                {props.roomCode ? `ROOM: ${props.roomCode}` : link || 'LOCAL WI-FI / HOTSPOT'}
+                {props.roomCode ? `Room Code: ${props.roomCode}` : link || 'Same Wi-Fi / Hotspot'}
               </div>
 
               <div className="receive-connect-btns">
@@ -168,7 +161,7 @@ export function ReceiveModal(props: {
                       </>
                     ) : (
                       <>
-                        <Copy size={14} /> Copy URL
+                        <Copy size={14} /> Copy Link
                       </>
                     )}
                   </button>
@@ -177,29 +170,16 @@ export function ReceiveModal(props: {
                   <button
                     className="btn btn-sm btn-secondary"
                     onClick={() =>
-                      navigator.share({ title: 'MogShare Receive Beacon', url: link }).catch(() => {})
+                      navigator.share({ title: 'Send files to me on MogShare', url: link }).catch(() => {})
                     }
                   >
-                    <Share2 size={14} /> Share
-                  </button>
-                )}
-                {props.onSimulateIncoming && (
-                  <button
-                    className="btn btn-sm btn-primary"
-                    onClick={() => {
-                      props.onSimulateIncoming?.();
-                      props.onClose();
-                    }}
-                    title="Send a test file to yourself right now"
-                  >
-                    <Download size={14} /> Test Receive File
+                    <Share2 size={14} /> Share Link
                   </button>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Auto-Accept Toggle & Vault Navigation */}
           <div className="receive-settings-row">
             <button
               className={`btn btn-sm flex-1 ${props.autoAcceptNearby ? 'btn-emerald' : 'btn-secondary'}`}
@@ -207,8 +187,8 @@ export function ReceiveModal(props: {
             >
               <Sparkles size={14} />
               {props.autoAcceptNearby
-                ? 'Auto-Accept: ON (Instant AirDrop Mode)'
-                : 'Auto-Accept: OFF (Ask Confirmation)'}
+                ? 'Auto-Accept: ON (Save automatically)'
+                : 'Auto-Accept: OFF (Ask before receiving)'}
             </button>
             <button
               className="btn btn-sm btn-secondary"
@@ -216,21 +196,20 @@ export function ReceiveModal(props: {
                 props.onClose();
                 props.onGoVault();
               }}
-              title="Open Personal Space Vault"
             >
-              <HardDrive size={14} /> Open Vault
+              <HardDrive size={14} /> Saved Files
             </button>
           </div>
 
           <p className="small muted center">
             <Wifi size={13} style={{ display: 'inline', marginRight: 5 }} />
-            Every received file is SHA-256 verified and saved in your <strong>Personal Space Vault</strong> for instant viewing and download.
+            Local Wi-Fi transfers happen directly between your devices and use <strong>0 MB</strong> of internet data.
           </p>
         </div>
 
         <div className="modal-actions">
           <button className="btn btn-primary" onClick={props.onClose}>
-            Keep Listening in Background
+            Done
           </button>
         </div>
       </div>

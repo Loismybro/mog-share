@@ -8,24 +8,42 @@ export interface TrustState {
 
 export class TrustManager {
   private keyPair: CryptoKeyPair | null = null;
+  private publicKeyBase64: string | null = null;
+  private initPromise: Promise<string> | null = null;
   private peerPublicKeyRaw: string | null = null;
   private derivedKey: CryptoKey | null = null;
   private trustedDevicesKey = 'shareapp_trusted_keys';
 
-  public async init(): Promise<string> {
-    // Generate ECDH P-256 key pair
-    this.keyPair = await crypto.subtle.generateKey(
-      { name: 'ECDH', namedCurve: 'P-256' },
-      true,
-      ['deriveKey']
-    );
+  /**
+   * Idempotent initialization: caches the keypair generation promise so concurrent
+   * calls never overwrite the local ECDH keypair during handshake.
+   */
+  public init(): Promise<string> {
+    if (this.publicKeyBase64 && this.keyPair) {
+      return Promise.resolve(this.publicKeyBase64);
+    }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
 
-    // Export public key as base64 string
-    const rawPub = await crypto.subtle.exportKey('raw', this.keyPair.publicKey);
-    return this.bufferToBase64(rawPub);
+    this.initPromise = (async () => {
+      this.keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true,
+        ['deriveKey']
+      );
+      const rawPub = await crypto.subtle.exportKey('raw', this.keyPair.publicKey);
+      this.publicKeyBase64 = this.bufferToBase64(rawPub);
+      return this.publicKeyBase64;
+    })();
+
+    return this.initPromise;
   }
 
   public async deriveSharedKey(peerPublicKeyBase64: string): Promise<CryptoKey> {
+    if (!this.keyPair) {
+      await this.init();
+    }
     if (!this.keyPair) throw new Error('TrustManager not initialized');
     this.peerPublicKeyRaw = peerPublicKeyBase64;
 
@@ -82,7 +100,9 @@ export class TrustManager {
         stored.push(peerPublicKeyBase64);
         localStorage.setItem(this.trustedDevicesKey, JSON.stringify(stored));
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   public isPeerTrusted(peerPublicKeyBase64: string): boolean {
@@ -95,10 +115,6 @@ export class TrustManager {
     }
   }
 
-  /**
-   * Encrypts arbitrary binary frame with AES-256-GCM (Section 3.9).
-   * Frame layout: [12-byte IV][ciphertext + 16-byte auth tag]
-   */
   public async encryptFrame(frame: Uint8Array): Promise<Uint8Array> {
     if (!this.derivedKey) throw new Error('Shared key not derived');
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -113,9 +129,6 @@ export class TrustManager {
     return out;
   }
 
-  /**
-   * Decrypts AES-256-GCM frame.
-   */
   public async decryptFrame(encryptedFrame: Uint8Array): Promise<Uint8Array> {
     if (!this.derivedKey) throw new Error('Shared key not derived');
     if (encryptedFrame.byteLength < 28) {

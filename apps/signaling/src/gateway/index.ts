@@ -16,6 +16,9 @@ export class DeviceMessageBuffer {
   private buffers = new Map<string, QueuedMessage[]>();
 
   public push(deviceId: string, envelope: SignalingEnvelope) {
+    // Never buffer bulk data relay frames in the control replay buffer
+    if (envelope.type === 'relay-frame' || envelope.type === 'pong') return;
+
     let list = this.buffers.get(deviceId);
     if (!list) {
       list = [];
@@ -23,9 +26,11 @@ export class DeviceMessageBuffer {
     }
     list.push({ envelope, timestamp: Date.now() });
 
-    // Prune buffer
     const cutoff = Date.now() - MISSED_MESSAGES_BUFFER_SEC * 1000;
-    while (list.length > 0 && (list[0].timestamp < cutoff || list.length > MISSED_MESSAGES_BUFFER_MAX)) {
+    while (
+      list.length > 0 &&
+      (list[0].timestamp < cutoff || list.length > MISSED_MESSAGES_BUFFER_MAX)
+    ) {
       list.shift();
     }
   }
@@ -73,7 +78,15 @@ export class Gateway {
   private messageBuffer = new DeviceMessageBuffer();
 
   public registerConnection(conn: ClientConnection) {
+    const prev = this.connections.get(conn.deviceId);
+    // If upgrading/switching transport and there were queued poll messages, flush them to the new connection
+    const pendingQueue = prev?.pollQueue && prev.pollQueue.length > 0 ? [...prev.pollQueue] : [];
     this.connections.set(conn.deviceId, conn);
+    if (pendingQueue.length > 0 && conn.transport !== 'poll') {
+      for (const env of pendingQueue) {
+        this.sendDirect(conn, env);
+      }
+    }
   }
 
   public getConnection(deviceId: string): ClientConnection | undefined {
@@ -122,13 +135,16 @@ export class Gateway {
     }
 
     if (conn.transport === 'poll') {
-      if (conn.pollRes) {
+      if (conn.pollRes && !conn.pollRes.headersSent) {
         if (conn.pollTimer) clearTimeout(conn.pollTimer);
-        conn.pollRes.json({ messages: [envelope] });
+        const batch = [...(conn.pollQueue || []), envelope];
+        conn.pollQueue = [];
+        const res = conn.pollRes;
         conn.pollRes = undefined;
+        res.json({ messages: batch });
       } else {
         (conn.pollQueue ||= []).push(envelope);
-        if (conn.pollQueue.length > 200) conn.pollQueue.shift();
+        if (conn.pollQueue.length > 500) conn.pollQueue.shift();
       }
       return true;
     }

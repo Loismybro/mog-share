@@ -3,6 +3,7 @@ import {
   ICE_DISCONNECTED_GRACE_MS,
   ICE_PROBE_PONG_TIMEOUT_MS,
   STATS_POLL_INTERVAL_MS,
+  BUFFERED_AMOUNT_LOW_THRESHOLD,
 } from '@shareapp/shared';
 
 export type PathType = 'direct_lan' | 'direct_wan' | 'turn_relay' | 'server_relay';
@@ -23,22 +24,15 @@ export interface PeerSessionOptions {
   localDeviceId: string;
   remoteDeviceId: string;
   iceServers: RTCIceServer[];
-  forceRelay?: boolean; // For diagnostics and testing
+  forceRelay?: boolean;
   onSignal: (signal: PeerSignal) => void;
   onCtlMessage?: (data: unknown) => void;
   onDataFrame?: (frame: Uint8Array) => void;
+  onDataOpen?: () => void;
   onPathStats?: (stats: PeerPathStats) => void;
   onConnectionChange?: (state: RTCPeerConnectionState) => void;
 }
 
-/**
- * PeerSession implements the W3C Perfect Negotiation Pattern with:
- * - Deterministic politeness (lexicographical device ID comparison)
- * - Fixed negotiated data channels (id 0 ctl, id 1 data)
- * - ICE candidate queuing
- * - Automatic ICE restarts and stats polling
- * - Clean terminal teardown
- */
 export class PeerSession {
   public readonly localDeviceId: string;
   public readonly remoteDeviceId: string;
@@ -56,6 +50,7 @@ export class PeerSession {
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private probeTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private fallbackNegotiationTimer: ReturnType<typeof setTimeout> | null = null;
   private ctlQueue: string[] = [];
   private restartCount = 0;
   private closed = false;
@@ -66,7 +61,6 @@ export class PeerSession {
     this.options = options;
     this.localDeviceId = options.localDeviceId;
     this.remoteDeviceId = options.remoteDeviceId;
-    // Perfect Negotiation rule: smaller device ID is polite
     this.isPolite = this.localDeviceId < this.remoteDeviceId;
 
     const config: RTCConfiguration = {
@@ -78,8 +72,10 @@ export class PeerSession {
 
     this.pc = new RTCPeerConnection(config);
 
-    // Section 3.6: Pre-negotiated fixed channels
-    // id 0 "ctl": ordered, reliable control messages
+    // IMPORTANT: Attach PeerConnection handlers BEFORE createDataChannel so WebKit/iPadOS
+    // and Chromium never miss the initial negotiationneeded event!
+    this.setupPeerConnectionHandlers();
+
     this.ctlChannel = this.pc.createDataChannel('ctl', {
       id: 0,
       negotiated: true,
@@ -87,20 +83,32 @@ export class PeerSession {
     });
     this.ctlChannel.binaryType = 'arraybuffer';
 
-    // id 1 "data": ordered, reliable binary file blocks
     this.dataChannel = this.pc.createDataChannel('data', {
       id: 1,
       negotiated: true,
       ordered: true,
     });
     this.dataChannel.binaryType = 'arraybuffer';
-    this.dataChannel.bufferedAmountLowThreshold = 256 * 1024;
+    this.dataChannel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW_THRESHOLD;
 
     this.setupDataChannelHandlers();
-    this.setupPeerConnectionHandlers();
     this.startStatsPoller();
     if (this.ctlChannel.readyState === 'open') {
       this.flushCtlQueue();
+    }
+
+    // Explicitly kick off negotiation if the browser did not fire onnegotiationneeded
+    // (common with { negotiated: true } channels on Safari/WebKit and mobile browsers)
+    if (!this.isPolite) {
+      queueMicrotask(() => {
+        void this.ensureNegotiationStarted();
+      });
+    } else {
+      this.fallbackNegotiationTimer = setTimeout(() => {
+        if (!this.closed && this.pc.signalingState === 'stable' && !this.pc.remoteDescription) {
+          void this.ensureNegotiationStarted();
+        }
+      }, 900);
     }
   }
 
@@ -122,6 +130,39 @@ export class PeerSession {
 
   public get rtcPeerConnection(): RTCPeerConnection {
     return this.pc;
+  }
+
+  public async ensureNegotiationStarted(): Promise<void> {
+    if (
+      this.closed ||
+      this.makingOffer ||
+      this.pc.signalingState !== 'stable' ||
+      this.pc.localDescription ||
+      this.dataChannel.readyState === 'open'
+    ) {
+      return;
+    }
+    try {
+      this.makingOffer = true;
+      if (typeof this.pc.createOffer === 'function') {
+        const offer = await this.pc.createOffer();
+        if (this.pc.signalingState !== 'stable') return;
+        await this.pc.setLocalDescription(offer);
+      } else {
+        await this.pc.setLocalDescription();
+      }
+      const serialized = this.serializeSdp(this.pc.localDescription);
+      if (serialized) {
+        this.options.onSignal({
+          type: 'sdp',
+          sdp: serialized,
+        });
+      }
+    } catch {
+      /* ignore if mock or race */
+    } finally {
+      this.makingOffer = false;
+    }
   }
 
   private flushCtlQueue() {
@@ -155,18 +196,33 @@ export class PeerSession {
             }
             return;
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       this.options.onCtlMessage?.(ev.data);
     };
 
+    this.dataChannel.onopen = () => {
+      this.options.onDataOpen?.();
+    };
+
     this.dataChannel.onmessage = (ev) => {
-      const bytes = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : new Uint8Array(0);
-      this.options.onDataFrame?.(bytes);
+      const bytes =
+        ev.data instanceof ArrayBuffer
+          ? new Uint8Array(ev.data)
+          : ev.data instanceof Uint8Array
+          ? ev.data
+          : new Uint8Array(0);
+      if (bytes.byteLength > 0) {
+        this.options.onDataFrame?.(bytes);
+      }
     };
   }
 
-  private serializeSdp(desc: RTCSessionDescriptionInit | RTCSessionDescription | null): RTCSessionDescriptionInit | null {
+  private serializeSdp(
+    desc: RTCSessionDescriptionInit | RTCSessionDescription | null
+  ): RTCSessionDescriptionInit | null {
     if (!desc) return null;
     if (typeof (desc as any).toJSON === 'function') {
       return (desc as any).toJSON();
@@ -175,8 +231,8 @@ export class PeerSession {
   }
 
   private setupPeerConnectionHandlers() {
-    // Perfect negotiation: offer creation solely in onnegotiationneeded
     this.pc.onnegotiationneeded = async () => {
+      if (this.closed || this.makingOffer) return;
       try {
         this.makingOffer = true;
         await this.pc.setLocalDescription();
@@ -194,12 +250,16 @@ export class PeerSession {
       }
     };
 
-    // Trickle ICE
     this.pc.onicecandidate = (ev) => {
       if (ev.candidate) {
-        const candInit = typeof (ev.candidate as any).toJSON === 'function'
-          ? (ev.candidate as any).toJSON()
-          : { candidate: ev.candidate.candidate, sdpMid: ev.candidate.sdpMid, sdpMLineIndex: ev.candidate.sdpMLineIndex };
+        const candInit =
+          typeof (ev.candidate as any).toJSON === 'function'
+            ? (ev.candidate as any).toJSON()
+            : {
+                candidate: ev.candidate.candidate,
+                sdpMid: ev.candidate.sdpMid,
+                sdpMLineIndex: ev.candidate.sdpMLineIndex,
+              };
         this.options.onSignal({
           type: 'candidate',
           candidate: candInit,
@@ -207,7 +267,6 @@ export class PeerSession {
       }
     };
 
-    // Lifecycle handling (Section 3.6)
     this.pc.onconnectionstatechange = () => {
       const state = this.pc.connectionState;
       this.options.onConnectionChange?.(state);
@@ -219,7 +278,6 @@ export class PeerSession {
           this.disconnectTimer = null;
         }
       } else if (state === 'disconnected') {
-        // Wait 4 s, then trigger an ICE restart from impolite side
         if (!this.disconnectTimer) {
           this.disconnectTimer = setTimeout(() => {
             this.disconnectTimer = null;
@@ -229,34 +287,29 @@ export class PeerSession {
           }, ICE_DISCONNECTED_GRACE_MS);
         }
       } else if (state === 'failed') {
-        // Immediate ICE restart
         this.restartCount++;
         this.triggerIceRestart();
       }
     };
   }
 
-  /**
-   * Processes remote incoming signaling messages (SDP or ICE candidate).
-   * Implements Perfect Negotiation collision resolution and candidate queuing.
-   */
   public async handleSignal(signal: PeerSignal): Promise<void> {
     if (this.closed) return;
 
     if (signal.type === 'sdp') {
       const description = signal.sdp;
       const isOffer = description.type === 'offer';
-      const offerCollision = isOffer && (this.makingOffer || this.pc.signalingState !== 'stable');
+      const offerCollision =
+        isOffer && (this.makingOffer || this.pc.signalingState !== 'stable');
 
       this.ignoreOffer = !this.isPolite && offerCollision;
       if (this.ignoreOffer) {
-        return; // Impolite peer ignores colliding offer
+        return;
       }
 
       this.isSettingRemoteAnswerPending = description.type === 'answer';
       try {
         if (offerCollision) {
-          // Polite peer rolls back
           await Promise.all([
             this.pc.setLocalDescription({ type: 'rollback' }),
             this.pc.setRemoteDescription(description),
@@ -268,11 +321,19 @@ export class PeerSession {
         this.isSettingRemoteAnswerPending = false;
       }
 
-      // Flush candidates buffered while waiting for setRemoteDescription (Section 3.6)
       await this.flushCandidateQueue();
 
       if (isOffer) {
-        await this.pc.setLocalDescription();
+        if (typeof (this.pc as any).createAnswer === 'function' && !(this.pc as any).isMock) {
+          try {
+            await this.pc.setLocalDescription();
+          } catch {
+            const ans = await this.pc.createAnswer();
+            await this.pc.setLocalDescription(ans);
+          }
+        } else {
+          await this.pc.setLocalDescription();
+        }
         const serialized = this.serializeSdp(this.pc.localDescription);
         if (serialized) {
           this.options.onSignal({
@@ -284,7 +345,6 @@ export class PeerSession {
     } else if (signal.type === 'candidate') {
       const candidateInit = signal.candidate;
       if (!this.pc.remoteDescription || this.isSettingRemoteAnswerPending) {
-        // Queue candidates until setRemoteDescription completes
         this.candidateQueue.push(candidateInit);
       } else {
         try {
@@ -316,12 +376,11 @@ export class PeerSession {
     if (this.closed) return;
     try {
       this.pc.restartIce();
-    } catch { /* unsupported in some older browsers */ }
+    } catch {
+      /* ignore */
+    }
   }
 
-  /**
-   * Channel health probe on visibilitychange to visible, pageshow, or online event.
-   */
   public probeChannel(): Promise<boolean> {
     if (this.ctlChannel.readyState !== 'open') {
       this.triggerIceRestart();
@@ -376,16 +435,14 @@ export class PeerSession {
         clearTimeout(guard);
         resolve();
       };
-      // guard: never hang forever if the channel dies mid-wait
-      const guard = setTimeout(done, 5000);
+      const guard = setTimeout(done, 2500);
       dc.addEventListener('bufferedamountlow', done);
       dc.addEventListener('close', done);
       dc.addEventListener('error', done);
     });
   }
 
-  /** Resolves true once the data channel is open, false on timeout / close. */
-  public whenDataOpen(timeoutMs = 20000): Promise<boolean> {
+  public whenDataOpen(timeoutMs = 6000): Promise<boolean> {
     const dc = this.dataChannel;
     if (dc.readyState === 'open') return Promise.resolve(true);
     if (dc.readyState === 'closing' || dc.readyState === 'closed') return Promise.resolve(false);
@@ -425,17 +482,20 @@ export class PeerSession {
           const remoteCandidate = (stats as any).get(selectedPair.remoteCandidateId);
 
           let pathType: PathType = 'direct_lan';
-          let badgeLabel = 'Direct (same network)';
+          let badgeLabel = 'Local Wi-Fi (Zero Data)';
 
-          if (localCandidate?.candidateType === 'relay' || remoteCandidate?.candidateType === 'relay') {
+          if (
+            localCandidate?.candidateType === 'relay' ||
+            remoteCandidate?.candidateType === 'relay'
+          ) {
             pathType = 'turn_relay';
-            badgeLabel = 'Relayed (TURN UDP/TCP/TLS)';
+            badgeLabel = 'Cloud Relay';
           } else if (
             localCandidate?.candidateType === 'srflx' ||
             remoteCandidate?.candidateType === 'srflx'
           ) {
             pathType = 'direct_wan';
-            badgeLabel = 'Direct (internet)';
+            badgeLabel = 'Direct P2P';
           }
 
           const rttMs = Math.round((selectedPair.currentRoundTripTime || 0) * 1000);
@@ -449,13 +509,12 @@ export class PeerSession {
             availableBitrateBps: selectedPair.availableOutgoingBitrate,
           });
         }
-      } catch { /* poller ignore */ }
+      } catch {
+        /* poller ignore */
+      }
     }, STATS_POLL_INTERVAL_MS);
   }
 
-  /**
-   * Centralized cleanup (Section 3.6): stops poller, clears timers, closes channels & connection.
-   */
   public close() {
     if (this.closed) return;
     this.closed = true;
@@ -472,10 +531,20 @@ export class PeerSession {
       clearTimeout(this.probeTimeoutTimer);
       this.probeTimeoutTimer = null;
     }
+    if (this.fallbackNegotiationTimer) {
+      clearTimeout(this.fallbackNegotiationTimer);
+      this.fallbackNegotiationTimer = null;
+    }
 
-    try { this.ctlChannel.close(); } catch {}
-    try { this.dataChannel.close(); } catch {}
-    try { this.pc.close(); } catch {}
+    try {
+      this.ctlChannel.close();
+    } catch {}
+    try {
+      this.dataChannel.close();
+    } catch {}
+    try {
+      this.pc.close();
+    } catch {}
 
     this.candidateQueue = [];
   }

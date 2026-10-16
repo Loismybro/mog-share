@@ -36,9 +36,11 @@ export class FileSenderPipeline {
   private acknowledgedBlocks = new Set<number>();
   private totalBlocks: number;
   private pendingBlocks: number[] = [];
+  private blockAckTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   private isPaused = false;
   private isCancelled = false;
+  private isCompleted = false;
   private inFlight = false;
 
   private startTime = Date.now();
@@ -91,6 +93,21 @@ export class FileSenderPipeline {
     return hash >>> 0;
   }
 
+  private clearBlockTimer(blockIndex: number) {
+    const t = this.blockAckTimers.get(blockIndex);
+    if (t) {
+      clearTimeout(t);
+      this.blockAckTimers.delete(blockIndex);
+    }
+  }
+
+  private clearAllBlockTimers() {
+    for (const t of this.blockAckTimers.values()) {
+      clearTimeout(t);
+    }
+    this.blockAckTimers.clear();
+  }
+
   public grantCredits(credits: number) {
     this.availableCredits = Math.min(
       this.availableCredits + credits,
@@ -109,19 +126,23 @@ export class FileSenderPipeline {
   }
 
   public retryBlock(blockIndex: number) {
+    this.clearBlockTimer(blockIndex);
+    if (this.acknowledgedBlocks.has(blockIndex) || this.isCompleted || this.isCancelled) return;
     if (!this.pendingBlocks.includes(blockIndex)) {
       this.pendingBlocks.unshift(blockIndex);
     }
+    this.availableCredits = Math.max(1, this.availableCredits);
     this.isPaused = false;
-    this.isCancelled = false;
     if (!this.inFlight) {
       void this.pump();
     }
   }
 
   public handleBlockAck(blockIndex: number, verified: boolean) {
+    this.clearBlockTimer(blockIndex);
+
     if (!verified) {
-      this.callbacks.onError(new Error(`Block ${blockIndex} failed verification on receiver`));
+      this.retryBlock(blockIndex);
       return;
     }
 
@@ -137,7 +158,7 @@ export class FileSenderPipeline {
       const dt = Math.max(0.05, (now - this.lastSpeedSampleTime) / 1000);
       const elapsedTotal = Math.max(0.05, (now - this.startTime) / 1000);
       let speedBps = (this.acknowledgedBytes - this.lastAckedBytes) / dt;
-      if (dt >= 0.25) {
+      if (dt >= 0.2) {
         this.lastSpeedSampleTime = now;
         this.lastAckedBytes = this.acknowledgedBytes;
       } else {
@@ -147,7 +168,9 @@ export class FileSenderPipeline {
       this.callbacks.onAckedProgress(this.acknowledgedBytes, this.file.size, speedBps);
       this.callbacks.onBlockCompleted(blockIndex);
 
-      if (this.acknowledgedBlocks.size >= this.totalBlocks) {
+      if (this.acknowledgedBlocks.size >= this.totalBlocks && !this.isCompleted) {
+        this.isCompleted = true;
+        this.clearAllBlockTimers();
         this.callbacks.onFileCompleted();
       }
     }
@@ -175,10 +198,11 @@ export class FileSenderPipeline {
   public cancel() {
     this.isCancelled = true;
     this.isPaused = false;
+    this.clearAllBlockTimers();
   }
 
   private async pump() {
-    if (this.inFlight || this.isPaused || this.isCancelled) return;
+    if (this.inFlight || this.isPaused || this.isCancelled || this.isCompleted) return;
     this.inFlight = true;
 
     try {
@@ -186,9 +210,11 @@ export class FileSenderPipeline {
         this.pendingBlocks.length > 0 &&
         this.availableCredits > 0 &&
         !this.isPaused &&
-        !this.isCancelled
+        !this.isCancelled &&
+        !this.isCompleted
       ) {
         const blockIdx = this.pendingBlocks.shift()!;
+        if (this.acknowledgedBlocks.has(blockIdx)) continue;
         this.availableCredits--;
 
         await this.sendBlock(blockIdx);
@@ -212,11 +238,11 @@ export class FileSenderPipeline {
     const numChunks = Math.max(1, Math.ceil(totalBlockBytes / this.chunkSize));
 
     for (let c = 0; c < numChunks; c++) {
-      if (this.isCancelled) return;
+      if (this.isCancelled || this.isCompleted) return;
       while (this.isPaused && !this.isCancelled) {
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 80));
       }
-      if (this.isCancelled) return;
+      if (this.isCancelled || this.isCompleted) return;
 
       if (this.callbacks.getBufferedAmount() > BUFFERED_AMOUNT_HIGH_WATERMARK) {
         await this.callbacks.waitForBufferedAmountLow();
@@ -224,7 +250,7 @@ export class FileSenderPipeline {
 
       const cStart = c * this.chunkSize;
       const cEnd = Math.min(totalBlockBytes, (c + 1) * this.chunkSize);
-      const chunkBytes = new Uint8Array(blockBuffer.slice(cStart, cEnd));
+      const chunkBytes = new Uint8Array(blockBuffer, cStart, cEnd - cStart);
 
       const frame = encodeBinaryFrame(
         {
@@ -238,14 +264,23 @@ export class FileSenderPipeline {
       );
 
       await this.callbacks.sendDataChannel(frame);
-      this.rawBytesSent = Math.min(this.file.size, this.rawBytesSent + chunkBytes.byteLength);
 
-      if (this.callbacks.onChunkProgress && (c % 4 === 0 || c === numChunks - 1)) {
+      const currentInFlight = startByte + cEnd;
+      if (currentInFlight > this.rawBytesSent) {
+        this.rawBytesSent = Math.min(this.file.size, currentInFlight);
+      }
+
+      if (this.callbacks.onChunkProgress && (c % 6 === 0 || c === numChunks - 1)) {
         const elapsed = Math.max(0.05, (Date.now() - this.startTime) / 1000);
-        this.callbacks.onChunkProgress(
+        // Clamp unacknowledged progress to at most acknowledgedBytes + 2 blocks so UI never jumps to fake 99%
+        const honestBytes = Math.min(
           this.rawBytesSent,
+          this.acknowledgedBytes + this.blockSize * 2
+        );
+        this.callbacks.onChunkProgress(
+          honestBytes,
           this.file.size,
-          this.rawBytesSent / elapsed
+          honestBytes / elapsed
         );
       }
     }
@@ -261,5 +296,21 @@ export class FileSenderPipeline {
       type: 'block-end',
       payload: blockEndPayload,
     });
+
+    // Watchdog: if block-ack does not arrive within 3.5s, re-send block-end or retransmit block
+    this.clearBlockTimer(blockIndex);
+    if (typeof window !== 'undefined') {
+      const timer = setTimeout(() => {
+        if (
+          !this.acknowledgedBlocks.has(blockIndex) &&
+          !this.isCancelled &&
+          !this.isPaused &&
+          !this.isCompleted
+        ) {
+          this.retryBlock(blockIndex);
+        }
+      }, 3500);
+      this.blockAckTimers.set(blockIndex, timer);
+    }
   }
 }

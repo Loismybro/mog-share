@@ -1,16 +1,11 @@
-import React from 'react';
 import {
   Smartphone,
   Laptop,
   MonitorSmartphone,
   Wifi,
-  Radio,
   RefreshCw,
-  Sparkles,
-  BatteryCharging,
   MessageSquare,
   Send,
-  Download,
 } from 'lucide-react';
 import type { Device, Platform } from '../types';
 
@@ -27,9 +22,6 @@ export function RadarScanner(props: {
   onSelectPeer: (peer: Device) => void;
   onMessagePeer?: (peer: Device) => void;
   onRescan?: () => void;
-  onSimulateIncoming?: () => void;
-  demoEnabled?: boolean;
-  onToggleDemo?: () => void;
   isScanning: boolean;
   hasStagedFiles?: boolean;
 }) {
@@ -40,17 +32,15 @@ export function RadarScanner(props: {
     onSelectPeer,
     onMessagePeer,
     onRescan,
-    onSimulateIncoming,
-    demoEnabled,
-    onToggleDemo,
     isScanning,
     hasStagedFiles,
   } = props;
 
-  // Calculate orbital positions for up to 8 peers
+  // Place peers cleanly along the circular orbit (radius 36% of square stage so they never clip)
   const peerPositions = peers.slice(0, 8).map((peer, i) => {
-    const angle = (i * (360 / Math.max(peers.length, 1)) - 65) * (Math.PI / 180);
-    const radius = peers.length === 1 ? 33 : 35 + (i % 2 === 0 ? 4 : -4);
+    const count = Math.min(peers.length, 8);
+    const angle = ((i * (360 / Math.max(count, 1)) - 55) * Math.PI) / 180;
+    const radius = count === 1 ? 33 : 35;
     const x = 50 + radius * Math.cos(angle);
     const y = 50 + radius * Math.sin(angle);
     return { peer, x, y };
@@ -61,155 +51,110 @@ export function RadarScanner(props: {
       <div className="radar-header">
         <div className="radar-header-left">
           <span className="radar-status-pill">
-            <Radio size={14} className={isScanning ? 'pulse-icon' : ''} />
-            <span>LIVE SONAR AUTO-DISCOVERY</span>
+            <span className={`radar-live-dot ${isScanning ? 'active' : ''}`} />
+            <span>Nearby Discovery</span>
           </span>
-          <span className="radar-peer-count mono">
-            {peers.length} {peers.length === 1 ? 'DEVICE ONLINE' : 'DEVICES ONLINE'}
+          <span className="radar-peer-count">
+            {peers.length === 0
+              ? 'Searching local Wi-Fi & Hotspot…'
+              : `${peers.length} ${peers.length === 1 ? 'device ready' : 'devices ready'}`}
           </span>
         </div>
 
-        <div className="radar-header-actions">
-          {onToggleDemo && (
-            <button
-              type="button"
-              className={`radar-action-chip ${demoEnabled ? 'active' : ''}`}
-              onClick={onToggleDemo}
-              title="Spawn a virtual loopback peer to test file transfers & chat on this device"
-            >
-              <Sparkles size={13} />
-              <span>{demoEnabled ? 'Demo Peer: ON' : 'Simulate Peer'}</span>
-            </button>
-          )}
-          {demoEnabled && onSimulateIncoming && (
-            <button
-              type="button"
-              className="radar-action-chip accent"
-              onClick={onSimulateIncoming}
-              title="Simulate receiving a file from the demo peer"
-            >
-              <Download size={13} />
-              <span>Test Receive</span>
-            </button>
-          )}
-          {onRescan && (
-            <button
-              type="button"
-              className="radar-action-chip"
-              onClick={onRescan}
-              title="Rescan local Wi-Fi, hotspot, and browser tabs"
-            >
-              <RefreshCw size={13} />
-              <span>Rescan</span>
-            </button>
-          )}
-        </div>
+        {onRescan && (
+          <button
+            type="button"
+            className="radar-action-chip"
+            onClick={onRescan}
+            title="Refresh nearby device scan"
+          >
+            <RefreshCw size={13} />
+            <span>Scan Again</span>
+          </button>
+        )}
       </div>
 
-      <div className="radar-screen">
-        {/* Ambient glow backdrop */}
-        <div className="radar-ambient-glow" />
+      <div className="radar-stage-wrap">
+        <div className="radar-disc">
+          {/* Subtle concentric rings that fit 100% inside the circular disc */}
+          <div className="radar-ring ring-inner" />
+          <div className="radar-ring ring-mid" />
+          <div className="radar-ring ring-outer" />
 
-        {/* Concentric rings */}
-        <div className="radar-ring ring-1" />
-        <div className="radar-ring ring-2" />
-        <div className="radar-ring ring-3" />
-        <div className="radar-ring ring-4" />
+          {/* Soft rotating scanner sweep */}
+          <div className="radar-sweep-cone" />
 
-        {/* Crosshair grid lines */}
-        <div className="radar-crosshair radar-axis-x" />
-        <div className="radar-crosshair radar-axis-y" />
-
-        {/* Sweeping Beam */}
-        <div className="radar-sweep-beam" />
-
-        {/* Center Node (You) */}
-        <div className="radar-center-node" title={`This Device: ${deviceName}`}>
-          <div className="center-pulse-halo" />
-          <div className="center-pulse-halo delay" />
-          <div className="center-avatar-box">
-            <Laptop size={22} />
+          {/* Center Node (This Device) */}
+          <div className="radar-center-node" title={`This device: ${deviceName}`}>
+            <div className="center-pulse-halo" />
+            <div className="center-avatar-box">
+              <Laptop size={20} />
+            </div>
+            <span className="center-label">{deviceName}</span>
+            {deviceSubtitle && <span className="center-sublabel">{deviceSubtitle}</span>}
           </div>
-          <span className="center-label mono">YOU · {deviceName.split('·')[0].trim()}</span>
-          {deviceSubtitle && <span className="center-sublabel">{deviceSubtitle}</span>}
-        </div>
 
-        {/* Orbiting Peer Nodes */}
-        {peerPositions.map(({ peer, x, y }) => (
-          <div
-            key={peer.id}
-            className="radar-peer-wrapper"
-            style={{ left: `${x}%`, top: `${y}%` }}
-          >
-            <button
-              type="button"
-              className={`radar-peer-node ${peer.isSimulated ? 'simulated' : ''} ${hasStagedFiles ? 'ready-to-send' : ''}`}
-              onClick={() => onSelectPeer(peer)}
-              title={
-                hasStagedFiles
-                  ? `Tap to send staged files to ${peer.name}`
-                  : `Tap to pick and send files to ${peer.name}`
-              }
+          {/* Discovered Peer Nodes in Orbit */}
+          {peerPositions.map(({ peer, x, y }) => (
+            <div
+              key={peer.id}
+              className="radar-peer-wrapper"
+              style={{ left: `${x}%`, top: `${y}%` }}
             >
-              <div className="peer-node-avatar">
-                {platformIcon(peer.platform, 20)}
-                <span className="peer-node-online-dot" />
-                {hasStagedFiles && (
-                  <span className="peer-send-badge" title="Send staged files">
-                    <Send size={10} />
-                  </span>
-                )}
-              </div>
-              <div className="peer-node-pill">
-                <span className="peer-node-name">{peer.name}</span>
-                <span className="peer-node-meta mono">
-                  {peer.model || peer.os || peer.platform}
-                  {peer.rttMs != null ? ` · ${peer.rttMs}ms` : ''}
-                  {peer.batteryLevel != null ? ` · ${peer.batteryLevel}%` : ''}
-                </span>
-              </div>
-            </button>
-            {onMessagePeer && (
               <button
                 type="button"
-                className="radar-peer-msg-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onMessagePeer(peer);
-                }}
-                title={`Send quick message to ${peer.name}`}
+                className={`radar-peer-node ${hasStagedFiles ? 'ready-to-send' : ''}`}
+                onClick={() => onSelectPeer(peer)}
+                title={
+                  hasStagedFiles
+                    ? `Send staged files to ${peer.name}`
+                    : `Pick files to send to ${peer.name}`
+                }
               >
-                <MessageSquare size={12} />
+                <div className="peer-node-avatar">
+                  {platformIcon(peer.platform, 19)}
+                  <span className="peer-node-online-dot" />
+                  {hasStagedFiles && (
+                    <span className="peer-send-badge">
+                      <Send size={9} />
+                    </span>
+                  )}
+                </div>
+                <div className="peer-node-pill">
+                  <span className="peer-node-name">{peer.name}</span>
+                  <span className="peer-node-meta">
+                    {peer.rttMs != null ? `${peer.rttMs}ms` : 'Local Wi-Fi'}
+                    {peer.batteryLevel != null ? ` · ${peer.batteryLevel}%` : ''}
+                  </span>
+                </div>
               </button>
-            )}
-          </div>
-        ))}
-
-        {/* Empty state hint */}
-        {peers.length === 0 && (
-          <div className="radar-empty-hint">
-            <Wifi size={16} className="pulse-icon" />
-            <span>
-              Scanning Wi-Fi, Hotspot & Local Tabs… Open MogShare on another device or tab, or tap{' '}
-              <strong>Simulate Peer</strong> to test!
-            </span>
-          </div>
-        )}
+              {onMessagePeer && (
+                <button
+                  type="button"
+                  className="radar-peer-msg-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMessagePeer(peer);
+                  }}
+                  title={`Message ${peer.name}`}
+                >
+                  <MessageSquare size={11} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="radar-footer">
-        <span className="radar-footer-text">
+        <Wifi size={14} className="radar-footer-icon" />
+        <span>
           {peers.length > 0
             ? hasStagedFiles
-              ? '⚡ Files staged! Tap any orbiting device above to start instant P2P transfer.'
-              : 'Tap any discovered device in orbit to pick & beam files, or drag files directly onto a device.'
-            : 'Auto-detects devices on the same Wi-Fi, mobile hotspot, or browser tabs in real time.'}
+              ? 'Tap any device above to send your selected files immediately.'
+              : 'Tap a device to send files directly over Wi-Fi (uses 0 MB of internet data).'
+            : 'Open MogShare on another phone, tablet, or computer on the same Wi-Fi or Hotspot.'}
         </span>
-        {peers.some((p) => p.batteryLevel != null && p.isCharging) && (
-          <span className="radar-telemetry-tag mono">
-            <BatteryCharging size={13} /> Telemetry Active
-          </span>
-        )}
       </div>
     </div>
   );

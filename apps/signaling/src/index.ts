@@ -36,7 +36,6 @@ app.set('trust proxy', true);
 app.use(cors({ origin: ALLOWED_ORIGIN === '*' ? true : ALLOWED_ORIGIN }));
 app.use(express.json({ limit: `${MAX_SIGNALING_MESSAGE_SIZE}b` }));
 
-// Security headers
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -67,6 +66,30 @@ function serializePeer(p: DeviceSession) {
   };
 }
 
+function schedulePeerAndRoomDisconnect(departingId: string) {
+  groupIndex.scheduleDisconnect(departingId, (peersToNotify) => {
+    for (const peer of peersToNotify) {
+      gateway.sendToClient(
+        peer.deviceId,
+        createEnvelope('peer-left', { deviceId: departingId })
+      );
+    }
+    // Only leave rooms after the grace period expires without reconnection
+    const userRooms = roomManager.getRoomsForDevice(departingId);
+    for (const room of userRooms) {
+      roomManager.leaveRoom(room.code, departingId);
+      for (const peerId of room.peerIds) {
+        if (peerId !== departingId) {
+          gateway.sendToClient(
+            peerId,
+            createEnvelope('peer-left-room', { peerId: departingId, roomCode: room.code })
+          );
+        }
+      }
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // HTTP Endpoints
 // ---------------------------------------------------------------------------
@@ -81,7 +104,6 @@ app.get('/api/health', (_req, res) => {
 });
 app.get('/metrics', (req, res) => handleMetrics(req, res, metrics));
 
-// LAN info (R6)
 app.get('/api/info', (req, res) => {
   const addresses: string[] = [];
   const ifaces = os.networkInterfaces();
@@ -94,25 +116,22 @@ app.get('/api/info', (req, res) => {
   res.json({ lanAddresses: addresses, port: PORT, clientIp, family });
 });
 
-// Probes (Section 3.1 & 3.3)
 app.get('/ip', handleSimpleIpRequest);
 app.get('/api/probe', (req, res) => handleProbeRequest(req, res, SERVER_SALT));
 app.get('/api/probe/v4', handleSimpleIpRequest);
 app.get('/api/probe/v6', handleSimpleIpRequest);
 
-// Debug whoami (Section 3.2)
 app.get('/debug/whoami', (req, res) => {
   const { clientIp, family, isProxied } = extractVerifiedClientIp(req);
   const groupKey = deriveNetworkKey(clientIp, SERVER_SALT);
   res.json({ clientIp, family, isProxied, groupKey });
 });
 
-// Ephemeral TURN credentials (Section 3.7)
 app.get('/api/turn-credentials', (req, res) => {
   handleTurnCredentialsRequest(req, res, COTURN_SECRET, COTURN_REALM);
 });
 
-// Transport ladder: SSE down (Section 3.5)
+// Transport ladder: SSE down
 app.get('/api/events', (req, res) => {
   const deviceId = req.query.deviceId as string;
   if (!deviceId) {
@@ -126,6 +145,7 @@ app.get('/api/events', (req, res) => {
   res.flushHeaders();
   res.write(': connected\n\n');
 
+  groupIndex.cancelDisconnect(deviceId);
   gateway.registerConnection({ deviceId, transport: 'sse', sseRes: res });
   const keepAlive = setInterval(() => {
     try {
@@ -138,15 +158,11 @@ app.get('/api/events', (req, res) => {
     clearInterval(keepAlive);
     if (gateway.getConnection(deviceId)?.sseRes !== res) return;
     gateway.removeConnection(deviceId);
-    groupIndex.scheduleDisconnect(deviceId, (peersToNotify) => {
-      for (const peer of peersToNotify) {
-        gateway.sendToClient(peer.deviceId, createEnvelope('peer-left', { deviceId }));
-      }
-    });
+    schedulePeerAndRoomDisconnect(deviceId);
   });
 });
 
-// Transport ladder: POST up (Section 3.5)
+// Transport ladder: POST up
 app.post('/api/message', (req, res) => {
   try {
     const envelope = validateEnvelope(req.body);
@@ -156,6 +172,7 @@ app.post('/api/message', (req, res) => {
       res.status(429).json({ error: 'Rate limit exceeded' });
       return;
     }
+    groupIndex.cancelDisconnect(fromId);
     if (!gateway.getConnection(fromId)) {
       gateway.registerConnection({ deviceId: fromId, transport: 'poll', pollQueue: [] });
     }
@@ -176,17 +193,20 @@ app.post('/api/message', (req, res) => {
   }
 });
 
-// Transport ladder: Long-polling (Section 3.5)
+// Transport ladder: Long-polling
 app.get('/api/poll', (req, res) => {
   const deviceId = req.query.deviceId as string;
   if (!deviceId) {
     res.status(400).json({ error: 'Missing deviceId' });
     return;
   }
+  groupIndex.cancelDisconnect(deviceId);
   const existing = gateway.getConnection(deviceId);
   if (existing?.transport === 'poll') {
     if (existing.pollTimer) clearTimeout(existing.pollTimer);
-    if (existing.pollRes && existing.pollRes !== res) existing.pollRes.json({ messages: [] });
+    if (existing.pollRes && existing.pollRes !== res && !existing.pollRes.headersSent) {
+      existing.pollRes.json({ messages: [] });
+    }
     const queued = existing.pollQueue || [];
     if (queued.length > 0) {
       existing.pollQueue = [];
@@ -199,13 +219,13 @@ app.get('/api/poll', (req, res) => {
     const c = gateway.getConnection(deviceId);
     if (c && c.pollRes === res) c.pollRes = undefined;
     if (!res.headersSent) res.json({ messages: [] });
-  }, 25000);
+  }, 20000);
   gateway.registerConnection({
     deviceId,
     transport: 'poll',
     pollRes: res,
     pollTimer: timer,
-    pollQueue: [],
+    pollQueue: existing?.pollQueue || [],
   });
   req.on('close', () => {
     clearTimeout(timer);
@@ -214,7 +234,7 @@ app.get('/api/poll', (req, res) => {
   });
 });
 
-// WebSocket keep-alive (ping every 25s, terminate on missed pong)
+// WebSocket keep-alive
 const aliveSockets = new WeakMap<WebSocket, boolean>();
 const pingInterval = setInterval(() => {
   for (const ws of wss.clients) {
@@ -232,7 +252,6 @@ const pingInterval = setInterval(() => {
 }, 25_000);
 pingInterval.unref?.();
 
-// Room lifecycle and expired room pruning
 const roomPruneInterval = setInterval(() => {
   roomManager.pruneExpiredRooms();
 }, 60_000);
@@ -276,6 +295,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     if (envelope.from) {
       const fromId = envelope.from;
       boundDeviceId = fromId;
+      groupIndex.cancelDisconnect(fromId);
       gateway.registerConnection({ deviceId: fromId, transport: 'ws', ws });
     }
 
@@ -294,30 +314,34 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       if (cur && cur.ws !== ws) return;
       const departingId = boundDeviceId;
       gateway.removeConnection(departingId);
-      groupIndex.scheduleDisconnect(departingId, (peersToNotify) => {
-        for (const peer of peersToNotify) {
-          gateway.sendToClient(
-            peer.deviceId,
-            createEnvelope('peer-left', { deviceId: departingId })
-          );
-        }
-      });
-
-      const userRooms = roomManager.getRoomsForDevice(boundDeviceId);
-      for (const room of userRooms) {
-        roomManager.leaveRoom(room.code, boundDeviceId);
-        for (const peerId of room.peerIds) {
-          if (peerId !== boundDeviceId) {
-            gateway.sendToClient(
-              peerId,
-              createEnvelope('peer-left-room', { peerId: boundDeviceId, roomCode: room.code })
-            );
-          }
-        }
-      }
+      schedulePeerAndRoomDisconnect(departingId);
     }
   });
 });
+
+function ensureDeviceSession(from: string, clientIp: string, payload?: Record<string, unknown>): DeviceSession {
+  let sess = groupIndex.getSession(from);
+  if (sess) {
+    groupIndex.cancelDisconnect(from);
+    sess.lastSeen = Date.now();
+    sess.heartbeatComplete = true;
+    return sess;
+  }
+  const connNetworkKey = deriveNetworkKey(clientIp, SERVER_SALT);
+  const combinedKeys = deriveNetworkKeySet(clientIp, SERVER_SALT, [connNetworkKey]);
+  sess = {
+    deviceId: from,
+    name: String(payload?.name || `Device (${from.slice(0, 4)})`).slice(0, 48),
+    platform: (payload?.platform as string) || 'web',
+    networkKeys: combinedKeys,
+    connectedAt: Date.now(),
+    lastSeen: Date.now(),
+    heartbeatComplete: true,
+    resumeToken: crypto.randomBytes(16).toString('hex'),
+  };
+  groupIndex.registerDevice(sess);
+  return sess;
+}
 
 function handleIncomingSocketMessage(
   ws: WebSocket,
@@ -342,7 +366,7 @@ function handleIncomingSocketMessage(
       const resumeToken = (payload.resumeToken as string) || crypto.randomBytes(16).toString('hex');
       const session: DeviceSession = {
         deviceId: from,
-        name: String(payload.name || 'Anonymous Peer').slice(0, 48),
+        name: String(payload.name || 'Device').slice(0, 48),
         platform: (payload.platform as string) || 'web',
         model: payload.model ? String(payload.model).slice(0, 48) : undefined,
         os: payload.os ? String(payload.os).slice(0, 32) : undefined,
@@ -353,7 +377,7 @@ function handleIncomingSocketMessage(
         networkKeys: combinedKeys,
         connectedAt: Date.now(),
         lastSeen: Date.now(),
-        heartbeatComplete: true, // Immediately ready for instant discovery
+        heartbeatComplete: true,
         resumeToken,
       };
 
@@ -369,32 +393,31 @@ function handleIncomingSocketMessage(
         )
       );
 
-      // Immediately broadcast presence to joiner and all peers in group
       broadcastGroupPresence(from);
+      broadcastRoomPresenceUpdate(from);
       break;
     }
 
     case 'rescan': {
       if (!from) return;
-      groupIndex.markHeartbeatComplete(from);
+      ensureDeviceSession(from, clientIp, payload);
       broadcastGroupPresence(from);
+      broadcastRoomPresenceUpdate(from);
       break;
     }
 
     case 'update-profile': {
       if (!from) return;
-      const sess = groupIndex.getSession(from);
-      if (sess) {
-        if (payload.name) sess.name = String(payload.name).slice(0, 48);
-        if (payload.platform) sess.platform = payload.platform as string;
-        if (payload.model !== undefined) sess.model = String(payload.model).slice(0, 48);
-        if (payload.os !== undefined) sess.os = String(payload.os).slice(0, 32);
-        if (payload.browser !== undefined) sess.browser = String(payload.browser).slice(0, 32);
-        if (typeof payload.batteryLevel === 'number') sess.batteryLevel = payload.batteryLevel;
-        if (typeof payload.isCharging === 'boolean') sess.isCharging = payload.isCharging;
-        broadcastGroupPresence(from);
-        broadcastRoomPresenceUpdate(from);
-      }
+      const sess = ensureDeviceSession(from, clientIp, payload);
+      if (payload.name) sess.name = String(payload.name).slice(0, 48);
+      if (payload.platform) sess.platform = payload.platform as string;
+      if (payload.model !== undefined) sess.model = String(payload.model).slice(0, 48);
+      if (payload.os !== undefined) sess.os = String(payload.os).slice(0, 32);
+      if (payload.browser !== undefined) sess.browser = String(payload.browser).slice(0, 32);
+      if (typeof payload.batteryLevel === 'number') sess.batteryLevel = payload.batteryLevel;
+      if (typeof payload.isCharging === 'boolean') sess.isCharging = payload.isCharging;
+      broadcastGroupPresence(from);
+      broadcastRoomPresenceUpdate(from);
       break;
     }
 
@@ -402,7 +425,7 @@ function handleIncomingSocketMessage(
       if (!from) return;
       const content = typeof payload.content === 'string' ? payload.content.slice(0, 100_000) : '';
       if (!content) return;
-      const senderSession = groupIndex.getSession(from);
+      const senderSession = ensureDeviceSession(from, clientIp, payload);
       const targetPeerId = typeof payload.targetPeerId === 'string' ? payload.targetPeerId : undefined;
       const out = {
         fromId: from,
@@ -461,7 +484,7 @@ function handleIncomingSocketMessage(
 
     case 'ping': {
       if (from) {
-        groupIndex.markHeartbeatComplete(from);
+        ensureDeviceSession(from, clientIp, payload);
         ws.send(
           JSON.stringify(
             createEnvelope(
@@ -499,6 +522,7 @@ function handleIncomingSocketMessage(
 
     case 'create-room': {
       if (!from) return;
+      ensureDeviceSession(from, clientIp, payload);
       const room = roomManager.createRoom(from, payload.password as string | undefined);
       metrics.totalRoomsCreated++;
       ws.send(JSON.stringify(createEnvelope('room-created', { roomCode: room.code })));
@@ -507,6 +531,11 @@ function handleIncomingSocketMessage(
 
     case 'join-room': {
       if (!from) return;
+      const joinerSession = ensureDeviceSession(from, clientIp, payload);
+      if (payload.name) joinerSession.name = String(payload.name).slice(0, 48);
+      if (payload.platform) joinerSession.platform = payload.platform as string;
+      if (payload.model) joinerSession.model = String(payload.model).slice(0, 48);
+
       const code = ((payload.roomCode as string) || '').toUpperCase();
       const password = payload.password as string | undefined;
       const ipHash = crypto.createHash('sha256').update(connNetworkKey).digest('hex').slice(0, 12);
@@ -547,7 +576,6 @@ function handleIncomingSocketMessage(
         JSON.stringify(createEnvelope('room-joined', { roomCode: code, peers: existingPeers }))
       );
 
-      const joinerSession = groupIndex.getSession(from);
       for (const peerId of joinResult.room!.peerIds) {
         if (peerId !== from) {
           gateway.sendToClient(
@@ -555,14 +583,7 @@ function handleIncomingSocketMessage(
             createEnvelope('peer-joined-room', {
               peerId: from,
               roomCode: code,
-              name: joinerSession?.name || `Device (${from.slice(0, 4)})`,
-              platform: joinerSession?.platform || 'web',
-              model: joinerSession?.model,
-              os: joinerSession?.os,
-              browser: joinerSession?.browser,
-              deviceType: joinerSession?.deviceType,
-              batteryLevel: joinerSession?.batteryLevel,
-              isCharging: joinerSession?.isCharging,
+              ...serializePeer(joinerSession),
             })
           );
         }
@@ -604,9 +625,11 @@ function handleSignalingMessage(envelope: SignalingEnvelope) {
 }
 
 function verifyPeerSharing(peerA: string, peerB: string): boolean {
+  if (roomManager.arePeersInSameRoom(peerA, peerB)) return true;
   const peersA = groupIndex.getVisiblePeers(peerA);
   if (peersA.some((p) => p.deviceId === peerB)) return true;
-  if (roomManager.arePeersInSameRoom(peerA, peerB)) return true;
+  // Also allow signaling between any two active registered sessions on the server
+  if (groupIndex.getSession(peerA) && groupIndex.getSession(peerB)) return true;
   return false;
 }
 
@@ -635,6 +658,16 @@ function broadcastRoomPresenceUpdate(deviceId: string) {
   if (!self) return;
   const rooms = roomManager.getRoomsForDevice(deviceId);
   for (const room of rooms) {
+    const existingPeers = Array.from(room.peerIds)
+      .filter((id) => id !== deviceId)
+      .map((id) => {
+        const s = groupIndex.getSession(id);
+        return s ? serializePeer(s) : { id, name: `Device (${id.slice(0, 4)})`, platform: 'web' };
+      });
+    gateway.sendToClient(
+      deviceId,
+      createEnvelope('room-joined', { roomCode: room.code, peers: existingPeers })
+    );
     for (const peerId of room.peerIds) {
       if (peerId !== deviceId) {
         gateway.sendToClient(
@@ -650,7 +683,6 @@ function broadcastRoomPresenceUpdate(deviceId: string) {
   }
 }
 
-// Serve built web client if available (single-origin deployment)
 const distCandidates = [
   path.resolve(process.cwd(), 'apps/web/dist'),
   path.resolve(process.cwd(), 'dist'),
@@ -686,9 +718,9 @@ if (process.env.NODE_ENV !== 'test') {
         if (addr.family === 'IPv4' && !addr.internal) addresses.push(addr.address);
       }
     }
-    console.log(`[MogShare Signaling] Listening on http://0.0.0.0:${PORT}`);
+    console.log(`[MogShare] Listening on http://0.0.0.0:${PORT}`);
     if (addresses.length > 0) {
-      console.log(`[MogShare LAN URLs]  ${addresses.map((ip) => `http://${ip}:${PORT}`).join(' | ')}`);
+      console.log(`[MogShare LAN] ${addresses.map((ip) => `http://${ip}:${PORT}`).join(' | ')}`);
     }
   });
 }

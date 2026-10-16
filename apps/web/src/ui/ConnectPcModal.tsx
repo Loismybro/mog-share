@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
-import { Laptop, Copy, Check, X, ExternalLink } from 'lucide-react';
+import { Laptop, Copy, Check, X } from 'lucide-react';
 
 export function ConnectPcModal(props: {
   onClose: () => void;
@@ -67,9 +67,9 @@ export function ConnectPcModal(props: {
       await navigator.clipboard.writeText(lanUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      props.pushToast('success', 'WebShare URL copied to clipboard');
+      props.pushToast('success', 'Link copied to clipboard');
     } catch {
-      props.pushToast('error', 'Failed to copy URL');
+      props.pushToast('error', 'Failed to copy link');
     }
   };
 
@@ -78,15 +78,15 @@ export function ConnectPcModal(props: {
       <div
         className="modal connect-pc-modal"
         role="dialog"
-        aria-label="Connect PC or Phone"
+        aria-label="Pair Another Device"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
           <div className="flex items-center gap-2">
             <span className="badge badge-indigo">
-              <Laptop size={13} /> WEBSHARE BRIDGE
+              <Laptop size={13} /> Quick Pair
             </span>
-            <h2>Connect Phone / PC</h2>
+            <h2>Pair Phone, Tablet, or PC</h2>
           </div>
           <button className="icon-btn" onClick={props.onClose} aria-label="Close">
             <X size={18} />
@@ -95,16 +95,16 @@ export function ConnectPcModal(props: {
 
         <div className="connect-pc-body">
           <p className="muted small">
-            Pair any Android, iPhone, Windows PC, Mac, or Linux machine with zero app installation required.
+            Connect any Android, iPhone, iPad, Mac, or Windows PC without installing any app.
           </p>
 
           <div className="pc-steps-grid">
             <div className="pc-step-card">
               <div className="step-num mono">1</div>
               <div className="step-content">
-                <strong>Connect to Same Wi-Fi or Hotspot</strong>
+                <strong>Same Wi-Fi or Hotspot (Zero Internet Data)</strong>
                 <p className="small muted">
-                  Join the same Wi-Fi network or mobile hotspot, or use a Room Code if on different networks.
+                  If both devices are on the same Wi-Fi or mobile hotspot, files transfer directly over local Wi-Fi without using your internet data.
                 </p>
               </div>
             </div>
@@ -112,9 +112,9 @@ export function ConnectPcModal(props: {
             <div className="pc-step-card">
               <div className="step-num mono">2</div>
               <div className="step-content">
-                <strong>Open This URL on the Other Device</strong>
+                <strong>Open Link or Scan QR Code</strong>
                 <p className="small muted">
-                  Auto-detected LAN / WebShare address for instant pairing:
+                  Open this link in the browser on your other device, or scan the QR code below:
                 </p>
                 <div className="pc-url-box mono">
                   <span>{lanUrl}</span>
@@ -122,23 +122,13 @@ export function ConnectPcModal(props: {
                     {copied ? <Check size={12} /> : <Copy size={12} />}
                   </button>
                 </div>
-              </div>
-            </div>
-
-            <div className="pc-step-card">
-              <div className="step-num mono">3</div>
-              <div className="step-content">
-                <strong>Or Scan QR Code with Phone Camera</strong>
-                <p className="small muted">
-                  Both devices will appear in the live sonar radar within 1 second:
-                </p>
                 {qrUrl && (
                   <div className="pc-qr-box">
                     <img
                       src={qrUrl}
                       alt="QR Code to connect device"
-                      width={164}
-                      height={164}
+                      width={160}
+                      height={160}
                       className="pc-qr-img"
                     />
                   </div>
@@ -149,15 +139,8 @@ export function ConnectPcModal(props: {
         </div>
 
         <div className="modal-actions">
-          <button className="btn btn-secondary" onClick={props.onClose}>
-            Close
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => window.open(lanUrl, '_blank')}
-            title="Open a second tab to test multi-tab P2P transfer immediately"
-          >
-            <ExternalLink size={15} /> Open Second Tab to Test
+          <button className="btn btn-primary" onClick={props.onClose}>
+            Done
           </button>
         </div>
       </div>
