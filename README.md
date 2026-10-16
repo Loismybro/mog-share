@@ -1,4 +1,4 @@
-# ⚡ MogShare 3.0 — Cross-Platform P2P Sharing Hub
+# ⚡ MogShare — Cross-Platform P2P Sharing Hub
 
 > **Zero-install peer-to-peer file, folder, and snippet sharing across Android, iOS, Windows, macOS, and Linux.**  
 > Powered by WebRTC DataChannels, Dual-Stack LAN/Hotspot & Multi-Tab Auto-Discovery, SHA-256 Block Verification, Persistent Personal Space Vault, and the **Twilight Horizon** (Bright-to-Slight-Dark) Dashboard UI.
