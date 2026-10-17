@@ -85,7 +85,6 @@ export function getPersistentDeviceId(): string {
     safeSet('mog_device_id', baseId);
   }
 
-  // Check if another tab in the same browser is actively heartbeating with baseId
   let finalId = baseId;
   try {
     const lastActive = Number(localStorage.getItem('mog_device_active_ts') || '0');
@@ -95,7 +94,6 @@ export function getPersistentDeviceId(): string {
     sessionStorage.setItem('mog_tab_token', myTabToken);
 
     if (activeHolder && activeHolder !== myTabToken && Date.now() - lastActive < 4500) {
-      // Another tab in this browser is open right now; derive a secondary tab ID
       finalId = `${baseId.slice(0, 24)}_${myTabToken.slice(0, 6)}`;
     } else {
       localStorage.setItem('mog_device_active_tab', myTabToken);
@@ -105,15 +103,6 @@ export function getPersistentDeviceId(): string {
   } catch {}
 
   return finalId;
-}
-
-function uint8ToBase64(bytes: Uint8Array): string {
-  let bin = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
 }
 
 function base64ToUint8(b64: string): Uint8Array {
@@ -183,7 +172,10 @@ export class NetworkService {
   private iceServers: IceServerConfig[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
+    { urls: 'stun:stun.nextcloud.com:443' },
   ];
 
   private visiblePeers = new Map<string, Device>();
@@ -201,12 +193,17 @@ export class NetworkService {
   private transferBitmaps = new Map<string, BlockBitmap>();
   private requestRetryTimers = new Map<string, ReturnType<typeof setInterval>>();
 
+  // Multi-file batch & concurrency coordination
+  private incomingRequestsQueue: IncomingRequest[] = [];
+  private autoAcceptPeers = new Map<string, number>();
+  private acceptedSendQueue = new Map<string, string[]>();
+  private runningSendersPerPeer = new Map<string, Set<string>>();
+
   private journal: TransferJournal;
   private destroyed = false;
   private seenCtl = new Set<string>();
   private latencyMs: number | null = null;
   private lastPingSent = 0;
-  private relayFrameCounter = 0;
   private pendingRoomAction: (() => void) | null = null;
 
   private subscribers = new Set<() => void>();
@@ -258,24 +255,27 @@ export class NetworkService {
         this.notifySubscribers();
       },
       onIncomingRequest: (req) => {
-        this.pendingIncomingReq = req;
-        callbacks?.onIncomingRequest?.(req);
+        this.enqueueOrAutoAcceptIncomingRequest(req);
+        callbacks?.onIncomingRequest?.(this.pendingIncomingReq || req);
         this.notifySubscribers();
       },
       onTransferUpdate: (t) => {
         if (t.status === 'completed' && t.direction === 'receiving' && t.fileBlob) {
-          void saveToPersonalSpace({
-            id: t.id,
-            transferId: t.id,
-            name: t.name,
-            size: t.size,
-            type: t.type,
-            senderName: t.peerName || 'Peer',
-            senderId: t.peerId,
-            receivedAt: Date.now(),
-            blob: t.fileBlob,
-            blobUrl: t.blobUrl,
-          }).catch(() => undefined);
+          // Save files <= 150 MB to IndexedDB Personal Vault automatically
+          if (t.size <= 150 * 1024 * 1024) {
+            void saveToPersonalSpace({
+              id: t.id,
+              transferId: t.id,
+              name: t.name,
+              size: t.size,
+              type: t.type,
+              senderName: t.peerName || 'Peer',
+              senderId: t.peerId,
+              receivedAt: Date.now(),
+              blob: t.fileBlob,
+              blobUrl: t.blobUrl,
+            }).catch(() => undefined);
+          }
         }
         callbacks?.onTransferUpdate?.(t);
         this.notifySubscribers();
@@ -311,6 +311,40 @@ export class NetworkService {
 
     this.initLocalBroadcastBus();
     void this.initialize();
+  }
+
+  private enqueueOrAutoAcceptIncomingRequest(req: IncomingRequest) {
+    const autoAcceptUntil = this.autoAcceptPeers.get(req.fromId) || 0;
+    const hasActiveReceiveFromPeer = Array.from(this.transferFiles.values()).some(
+      (t) => t.peerId === req.fromId && t.direction === 'receiving' && t.status === 'transferring'
+    );
+
+    if (Date.now() < autoAcceptUntil || hasActiveReceiveFromPeer) {
+      // Auto-accept subsequent files in a multi-file batch from the same peer!
+      this.autoAcceptPeers.set(req.fromId, Date.now() + 120_000);
+      void this.respondToRequest(req, true);
+      return;
+    }
+
+    if (!this.incomingRequestsQueue.some((r) => r.transferId === req.transferId)) {
+      this.incomingRequestsQueue.push(req);
+    }
+    this.rebuildPendingIncomingSummary();
+  }
+
+  private rebuildPendingIncomingSummary() {
+    if (this.incomingRequestsQueue.length === 0) {
+      this.pendingIncomingReq = null;
+      return;
+    }
+    const primary = this.incomingRequestsQueue[0];
+    const allMetas = this.incomingRequestsQueue.map((r) => r.meta);
+    const totalSize = allMetas.reduce((acc, m) => acc + (m?.size || 0), 0);
+    this.pendingIncomingReq = {
+      ...primary,
+      files: allMetas,
+      totalSize,
+    };
   }
 
   private notifySubscribers() {
@@ -373,12 +407,21 @@ export class NetworkService {
     };
   }
 
+  /**
+   * Sends multiple files (and large files) reliably both locally and online.
+   * Pre-warms turbo relay lanes & WebRTC channels and coordinates batch streaming.
+   */
   public async sendFiles(peerId: string, files: File[]): Promise<void> {
+    if (!files || files.length === 0) return;
     const peer =
       this.getPeers().find((p) => p.id === peerId) ||
       ({ id: peerId, name: 'Connected Peer', platform: 'web', status: 'online' } as Device);
-    for (const file of files) {
-      await this.sendFile(peer, file);
+
+    // Pre-warm parallel binary WebSocket turbo lanes for instant multi-route backup
+    this.signaling?.ensureTurboLanes(2);
+
+    for (let i = 0; i < files.length; i++) {
+      await this.sendFile(peer, files[i], i);
     }
   }
 
@@ -387,19 +430,39 @@ export class NetworkService {
   }
 
   public async acceptRequest(): Promise<void> {
-    const req = this.pendingIncomingReq;
-    if (!req) return;
+    if (this.incomingRequestsQueue.length === 0 && !this.pendingIncomingReq) return;
+    const batch =
+      this.incomingRequestsQueue.length > 0
+        ? [...this.incomingRequestsQueue]
+        : [this.pendingIncomingReq!];
+
+    this.incomingRequestsQueue = [];
     this.pendingIncomingReq = null;
+
+    for (const req of batch) {
+      this.autoAcceptPeers.set(req.fromId, Date.now() + 120_000);
+    }
     this.notifySubscribers();
-    await this.respondToRequest(req, true);
+
+    for (const req of batch) {
+      await this.respondToRequest(req, true);
+    }
   }
 
   public async declineRequest(): Promise<void> {
-    const req = this.pendingIncomingReq;
-    if (!req) return;
+    if (this.incomingRequestsQueue.length === 0 && !this.pendingIncomingReq) return;
+    const batch =
+      this.incomingRequestsQueue.length > 0
+        ? [...this.incomingRequestsQueue]
+        : [this.pendingIncomingReq!];
+
+    this.incomingRequestsQueue = [];
     this.pendingIncomingReq = null;
     this.notifySubscribers();
-    await this.respondToRequest(req, false);
+
+    for (const req of batch) {
+      await this.respondToRequest(req, false);
+    }
   }
 
   public sendChatMessage(peerId: string, text: string): void {
@@ -504,10 +567,6 @@ export class NetworkService {
     this.emitVisiblePeers();
   }
 
-  /**
-   * Deduplicates peers by both ID and hardware signature (name + platform + model)
-   * so the same Android/iOS/desktop device never appears twice after re-scanning or room sharing.
-   */
   private deduplicateDeviceList(rawList: Device[]): Device[] {
     const byId = new Map<string, Device>();
     for (const d of rawList) {
@@ -531,8 +590,8 @@ export class NetworkService {
         bySignature.set(sig, d);
       } else {
         const existing = bySignature.get(sig)!;
-        const dOpen = this.peerBundles.get(d.id)?.peerSession.data.readyState === 'open';
-        const exOpen = this.peerBundles.get(existing.id)?.peerSession.data.readyState === 'open';
+        const dOpen = this.peerBundles.get(d.id)?.peerSession.isAnyDataOpen();
+        const exOpen = this.peerBundles.get(existing.id)?.peerSession.isAnyDataOpen();
         if (dOpen && !exOpen) {
           bySignature.set(sig, d);
         }
@@ -560,10 +619,6 @@ export class NetworkService {
     this.callbacks.onRoomPeers(this.deduplicateDeviceList(list));
   }
 
-  /**
-   * Pre-warms the WebRTC PeerSession as soon as a peer is discovered so that
-   * by the time the user taps Send, the Direct Local Wi-Fi DataChannel is already open!
-   */
   private prewarmPeer(remoteDeviceId: string) {
     if (!remoteDeviceId || remoteDeviceId === this.deviceId) return;
     const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
@@ -711,7 +766,7 @@ export class NetworkService {
   }
 
   // -------------------------------------------------------------------------
-  // Instant Signaling Initialization (Zero Blocking on STUN/IPv6 Probes)
+  // Instant Signaling Initialization
   // -------------------------------------------------------------------------
   private async initialize() {
     this.setState('connecting', 'Connecting to discovery network…');
@@ -721,9 +776,12 @@ export class NetworkService {
         this.signaling.destroy();
       }
 
-      // 1. Connect WebSocket IMMEDIATELY so devices appear in <100ms
       this.signaling = new SignalingLadderClient(this.deviceId, this.serverUrl, {
         onMessage: (envelope) => this.handleSignalingEnvelope(envelope),
+        onBinaryFrame: (frame) => {
+          // Zero-copy binary relay frame from Multi-Route Turbo WebSocket lane!
+          this.handleDataFrame(frame);
+        },
         onStateChange: (state, _rung) => {
           if (state === 'connected') {
             this.sendJoinMessage();
@@ -755,7 +813,6 @@ export class NetworkService {
 
       const connectPromise = this.signaling.connect();
 
-      // 2. Run TURN credentials & dual-stack STUN network probe in parallel in background
       void (async () => {
         await this.fetchTurnCredentials();
         const probed = await probeNetwork(this.serverUrl, this.iceServers);
@@ -779,7 +836,11 @@ export class NetworkService {
         const data = await res.json();
         if (data.iceServers && Array.isArray(data.iceServers)) {
           const base = this.iceServers.filter((s) => !(s as { username?: string }).username);
-          this.iceServers = [...base, ...data.iceServers];
+          const merged = [...base];
+          for (const srv of data.iceServers) {
+            merged.push(srv);
+          }
+          this.iceServers = merged;
         }
       }
     } catch {
@@ -822,7 +883,7 @@ export class NetworkService {
     this.peerLastUpdated.set(p.id, Date.now());
     const existing = this.visiblePeers.get(p.id) || this.roomPeers.get(p.id);
     const bundle = this.peerBundles.get(p.id);
-    const isDirectOpen = bundle?.peerSession.data.readyState === 'open';
+    const isDirectOpen = bundle?.peerSession.isAnyDataOpen();
     return {
       id: p.id,
       name: p.name || existing?.name || `Device (${p.id.slice(0, 4)})`,
@@ -908,7 +969,6 @@ export class NetworkService {
           isCharging?: boolean;
         };
         if (p.id && p.id !== this.deviceId) {
-          // Remove any older entry in visiblePeers with the exact same name+platform+model
           for (const [oldId, oldPeer] of Array.from(this.visiblePeers.entries())) {
             if (
               oldId !== p.id &&
@@ -970,6 +1030,8 @@ export class NetworkService {
             this.prewarmPeer(p.id);
           }
         }
+        // Pre-warm multi-lane binary WebSocket turbo pool when joining an Online Room
+        this.signaling?.ensureTurboLanes(2);
         soundEffects.play('devicePaired');
         this.callbacks.onRoomJoined(code);
         this.emitRoomPeers();
@@ -1041,6 +1103,7 @@ export class NetworkService {
             )
           );
           this.prewarmPeer(pId);
+          this.signaling?.ensureTurboLanes(2);
           if (isNew) {
             haptics.play('deviceFound');
             soundEffects.play('devicePaired');
@@ -1109,7 +1172,7 @@ export class NetworkService {
           peer.connType =
             badge.toLowerCase().includes('local') || badge.toLowerCase().includes('direct')
               ? 'Local Wi-Fi · Zero Data'
-              : 'Cloud Bridge';
+              : 'Zap Multi-Route';
           this.emitVisiblePeers();
           if (this.roomPeers.has(remoteDeviceId)) {
             this.emitRoomPeers();
@@ -1227,27 +1290,29 @@ export class NetworkService {
         `${this.deviceId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     };
     const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
+    // Send over BOTH WebRTC ctl (if open) AND Signaling WebSocket to guarantee 0% control drop!
     if (bundle.peerSession.ctl.readyState === 'open') {
-      bundle.peerSession.sendCtl(envelopeWithId);
-    } else {
-      this.signaling?.send('signal', { ctl: envelopeWithId }, remoteDeviceId);
       try {
-        this.localBus?.postMessage({
-          kind: 'signal',
-          from: this.deviceId,
-          to: remoteDeviceId,
-          ctl: envelopeWithId,
-        });
+        bundle.peerSession.sendCtl(envelopeWithId);
       } catch {}
     }
+    this.signaling?.send('signal', { ctl: envelopeWithId }, remoteDeviceId);
+    try {
+      this.localBus?.postMessage({
+        kind: 'signal',
+        from: this.deviceId,
+        to: remoteDeviceId,
+        ctl: envelopeWithId,
+      });
+    } catch {}
   }
 
   /**
-   * High-speed hybrid transport:
-   * - Uses synchronous WebRTC DataChannel burst when open (0ms await overhead).
-   * - Uses direct binary BroadcastChannel for local same-browser tabs.
-   * - Streams immediately over WebSocket relay while WebRTC negotiates in parallel,
-   *   and upgrades mid-transfer to Direct Wi-Fi the instant DataChannel opens!
+   * Zap-Speed Multi-Route Hybrid Transport:
+   * - Route 1: 4x Parallel Unordered WebRTC DataChannels (with automatic spillover to Turbo Relay if buffer > 2.5 MiB!)
+   * - Route 2: Same-Browser BroadcastChannel zero-copy binary bus
+   * - Route 3: Multi-Lane Binary WebSocket Turbo Pool (/ws?turbo=1..2)
+   * - Route 4: HTTP Binary Burst (/api/turbo-relay)
    */
   private sendDataFrameHybrid(
     remoteDeviceId: string,
@@ -1257,14 +1322,7 @@ export class NetworkService {
   ): Promise<void> | void {
     const ps = bundle.peerSession;
 
-    // 1. Direct WebRTC DataChannel (Synchronous fast-path for maximum LAN/Wi-Fi throughput!)
-    if (ps.data.readyState === 'open') {
-      transfer.channel = 'direct';
-      ps.sendData(frame);
-      return;
-    }
-
-    // 2. Same-browser multi-tab BroadcastChannel binary fast-path
+    // Route 2: Same-browser multi-tab BroadcastChannel binary fast-path
     if (this.localBus && this.localBusPeers.has(remoteDeviceId)) {
       transfer.channel = 'direct';
       try {
@@ -1280,17 +1338,34 @@ export class NetworkService {
       }
     }
 
-    // 3. Kick WebRTC negotiation in background so it upgrades to Direct as soon as ICE completes
+    // Route 1: 4x Parallel WebRTC DataChannels
+    if (ps.isAnyDataOpen()) {
+      const rtcBuf = ps.getBufferedAmount();
+      if (rtcBuf < 2.5 * 1024 * 1024) {
+        transfer.channel = 'direct';
+        try {
+          ps.sendData(frame);
+          return;
+        } catch {
+          /* spillover to Turbo Relay below */
+        }
+      } else if (this.signaling) {
+        // Multi-Route Zap Spillover: WebRTC pipe is full, stripe excess frame over Binary Turbo Relay simultaneously!
+        this.signaling.sendBinaryRelay(remoteDeviceId, frame);
+        return;
+      }
+    }
+
+    // Kick WebRTC negotiation in background so it can join the multi-route pool as soon as ICE completes
     void ps.ensureNegotiationStarted();
 
-    // 4. High-speed pipelined WebSocket relay (only yield every 8 frames so throughput stays fast)
+    // Route 3 + Route 4: Multi-Lane Binary WebSocket Turbo Pool + HTTP Binary Burst Backup
     transfer.channel = 'relay';
-    const b64 = uint8ToBase64(frame);
-    this.signaling?.send('relay-frame', { data: b64, raw: true }, remoteDeviceId);
-
-    this.relayFrameCounter++;
-    if (this.relayFrameCounter % 8 === 0) {
-      return new Promise((r) => setTimeout(r, 2));
+    if (this.signaling) {
+      this.signaling.sendBinaryRelay(remoteDeviceId, frame);
+      if (this.signaling.getRelayBufferedAmount() > 3 * 1024 * 1024) {
+        return this.signaling.waitForRelayDrain(1.5 * 1024 * 1024);
+      }
     }
   }
 
@@ -1300,6 +1375,67 @@ export class NetworkService {
       clearInterval(t);
       this.requestRetryTimers.delete(transferId);
     }
+  }
+
+  /**
+   * Coordinates active sender pipelines per peer so multi-file & large-file batches
+   * stream at maximum speed without starving each other's block ACKs.
+   */
+  private enqueueAcceptedSender(remoteDeviceId: string, transferId: string) {
+    let queue = this.acceptedSendQueue.get(remoteDeviceId);
+    if (!queue) {
+      queue = [];
+      this.acceptedSendQueue.set(remoteDeviceId, queue);
+    }
+    if (!queue.includes(transferId)) {
+      queue.push(transferId);
+    }
+    this.pumpAcceptedSenders(remoteDeviceId);
+  }
+
+  private pumpAcceptedSenders(remoteDeviceId: string) {
+    let running = this.runningSendersPerPeer.get(remoteDeviceId);
+    if (!running) {
+      running = new Set();
+      this.runningSendersPerPeer.set(remoteDeviceId, running);
+    }
+
+    const queue = this.acceptedSendQueue.get(remoteDeviceId) || [];
+    while (queue.length > 0) {
+      // Allow up to 2 small files (< 8 MB) concurrently, or 1 large file dedicated at 100% bandwidth
+      const hasLargeRunning = Array.from(running).some((id) => {
+        const tf = this.transferFiles.get(id);
+        return tf && tf.size >= 8 * 1024 * 1024;
+      });
+      if (hasLargeRunning || running.size >= 2) {
+        break;
+      }
+      const nextId = queue[0];
+      const nextTf = this.transferFiles.get(nextId);
+      if (running.size > 0 && nextTf && nextTf.size >= 8 * 1024 * 1024) {
+        break;
+      }
+
+      queue.shift();
+      const sender = this.activeSenders.get(nextId);
+      if (!sender) continue;
+
+      running.add(nextId);
+      if (nextTf) {
+        nextTf.status = 'transferring';
+        this.callbacks.onTransferUpdate({ ...nextTf });
+      }
+      soundEffects.play('transferStart');
+      void sender.start();
+    }
+  }
+
+  private onSenderFinished(remoteDeviceId: string, transferId: string) {
+    const running = this.runningSendersPerPeer.get(remoteDeviceId);
+    if (running) {
+      running.delete(transferId);
+    }
+    this.pumpAcceptedSenders(remoteDeviceId);
   }
 
   // -------------------------------------------------------------------------
@@ -1312,7 +1448,7 @@ export class NetworkService {
     if (_msgId) {
       if (this.seenCtl.has(_msgId)) return;
       this.seenCtl.add(_msgId);
-      if (this.seenCtl.size > 3000) {
+      if (this.seenCtl.size > 5000) {
         const first = this.seenCtl.values().next().value;
         if (first) this.seenCtl.delete(first);
       }
@@ -1392,8 +1528,7 @@ export class NetworkService {
             t.status = 'transferring';
             this.callbacks.onTransferUpdate({ ...t });
           }
-          soundEffects.play('transferStart');
-          void sender.start();
+          this.enqueueAcceptedSender(remoteDeviceId, transferId);
         }
         break;
       }
@@ -1408,6 +1543,7 @@ export class NetworkService {
         }
         soundEffects.play('error');
         this.activeSenders.delete(transferId);
+        this.onSenderFinished(remoteDeviceId, transferId);
         break;
       }
 
@@ -1478,11 +1614,12 @@ export class NetworkService {
   // -------------------------------------------------------------------------
   // Public Transfer APIs
   // -------------------------------------------------------------------------
-  public async sendFile(peer: Device, file: File): Promise<void> {
-    const transferId = `xfer_${Math.random().toString(36).slice(2, 10)}`;
+  public async sendFile(peer: Device, file: File, fileIndex = 0): Promise<void> {
+    const transferId = `xfer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const bundle = this.getOrCreatePeerBundle(peer.id);
 
     void bundle.peerSession.ensureNegotiationStarted();
+    this.signaling?.ensureTurboLanes(2);
 
     if (!bundle.localPublicKey) {
       try {
@@ -1528,7 +1665,7 @@ export class NetworkService {
       peerId: peer.id,
       peerName: peer.name,
       channel: 'direct',
-      createdAt: Date.now(),
+      createdAt: Date.now() + fileIndex,
     };
     this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate({ ...transfer });
@@ -1541,7 +1678,7 @@ export class NetworkService {
     ) => {
       if (bytes < (transfer.bytesTransferred || 0) && !isAcked) return;
       transfer.bytesTransferred = bytes;
-      const maxPct = isAcked ? 99 : 95;
+      const maxPct = isAcked ? 99 : 96;
       transfer.progress =
         totalBytes > 0 ? Math.min(maxPct, Math.round((bytes / totalBytes) * 100)) : 100;
       if (speedBps > 0) {
@@ -1560,7 +1697,7 @@ export class NetworkService {
     const senderPipeline = new FileSenderPipeline(
       file,
       transferId,
-      0,
+      fileIndex,
       {
         sendDataChannel: (frame) => {
           return this.sendDataFrameHybrid(peer.id, bundle, frame, transfer);
@@ -1568,8 +1705,18 @@ export class NetworkService {
         sendCtlMessage: (msg) => {
           this.sendCtlReliable(peer.id, msg as Record<string, any>);
         },
-        getBufferedAmount: () => bundle.peerSession.getBufferedAmount(),
-        waitForBufferedAmountLow: () => bundle.peerSession.waitForBufferedAmountLow(),
+        getBufferedAmount: () => {
+          if (bundle.peerSession.isAnyDataOpen()) {
+            return bundle.peerSession.getBufferedAmount();
+          }
+          return this.signaling ? this.signaling.getRelayBufferedAmount() : 0;
+        },
+        waitForBufferedAmountLow: () => {
+          if (bundle.peerSession.isAnyDataOpen()) {
+            return bundle.peerSession.waitForBufferedAmountLow();
+          }
+          return this.signaling ? this.signaling.waitForRelayDrain() : Promise.resolve();
+        },
         onChunkProgress: (sentBytes, totalBytes, speedBps) => {
           updateSenderMetrics(sentBytes, totalBytes, speedBps, false);
         },
@@ -1588,6 +1735,7 @@ export class NetworkService {
           haptics.play('complete');
           soundEffects.play('transferComplete');
           this.activeSenders.delete(transferId);
+          this.onSenderFinished(peer.id, transferId);
         },
         onError: (err) => {
           this.clearRequestRetry(transferId);
@@ -1597,6 +1745,7 @@ export class NetworkService {
           haptics.play('error');
           soundEffects.play('error');
           this.activeSenders.delete(transferId);
+          this.onSenderFinished(peer.id, transferId);
         },
       },
       { chunkSize: DEFAULT_CHUNK_SIZE, blockSize: DEFAULT_BLOCK_SIZE }
@@ -1630,7 +1779,7 @@ export class NetworkService {
     const retryTimer = setInterval(() => {
       attempts++;
       const cur = this.transferFiles.get(transferId);
-      if (!cur || cur.status !== 'waiting' || attempts > 10) {
+      if (!cur || cur.status !== 'waiting' || attempts > 20) {
         this.clearRequestRetry(transferId);
         return;
       }
@@ -1652,6 +1801,7 @@ export class NetworkService {
     }
 
     void bundle.peerSession.ensureNegotiationStarted();
+    this.signaling?.ensureTurboLanes(2);
 
     if (!bundle.localPublicKey) {
       try {
@@ -1683,7 +1833,7 @@ export class NetworkService {
     });
     this.activeWriters.set(transferId, writer);
 
-    const isDirect = bundle.peerSession.data.readyState === 'open';
+    const isDirect = bundle.peerSession.isAnyDataOpen();
     const transfer: TransferFile = {
       id: transferId,
       name: req.meta.name,
@@ -1698,7 +1848,7 @@ export class NetworkService {
       speed: 0,
       peerId: req.fromId,
       peerName: req.fromName,
-      channel: isDirect ? 'direct' : 'direct',
+      channel: isDirect ? 'direct' : 'relay',
       createdAt: Date.now(),
     };
     this.transferFiles.set(transferId, transfer);
@@ -1737,7 +1887,7 @@ export class NetworkService {
           }
           transfer.speed = transfer.speedBytesPerSec;
           transfer.channel =
-            bundle.peerSession.data.readyState === 'open' || this.localBusPeers.has(req.fromId)
+            bundle.peerSession.isAnyDataOpen() || this.localBusPeers.has(req.fromId)
               ? 'direct'
               : 'relay';
           const remaining = Math.max(0, totalBytes - verifiedBytes);
@@ -1772,7 +1922,23 @@ export class NetworkService {
           transfer.etaSeconds = 0;
           if (output) {
             transfer.fileBlob = output;
-            transfer.blobUrl = URL.createObjectURL(output);
+            try {
+              transfer.blobUrl = URL.createObjectURL(output);
+              // Automatically save completed file to device downloads
+              if (typeof document !== 'undefined' && transfer.blobUrl) {
+                const a = document.createElement('a');
+                a.href = transfer.blobUrl;
+                a.download = req.meta.name || 'download';
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                  try {
+                    document.body.removeChild(a);
+                  } catch {}
+                }, 500);
+              }
+            } catch {}
           }
           this.callbacks.onTransferUpdate({ ...transfer });
           haptics.play('complete');
@@ -1825,6 +1991,9 @@ export class NetworkService {
       t.speedBytesPerSec = 0;
       t.etaSeconds = 0;
       this.callbacks.onTransferUpdate({ ...t });
+      if (t.peerId) {
+        this.onSenderFinished(t.peerId, id);
+      }
     }
 
     this.activeSenders.delete(id);

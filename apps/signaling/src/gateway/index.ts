@@ -4,6 +4,7 @@ import {
   RATE_LIMIT_MESSAGES_PER_SEC,
   MISSED_MESSAGES_BUFFER_MAX,
   MISSED_MESSAGES_BUFFER_SEC,
+  createEnvelope,
   type SignalingEnvelope,
 } from '@shareapp/shared';
 
@@ -74,6 +75,8 @@ export interface ClientConnection {
 
 export class Gateway {
   private connections = new Map<string, ClientConnection>();
+  private turboSockets = new Map<string, Set<WebSocket>>();
+  private turboRoundRobin = new Map<string, number>();
   private rateLimiter = new RateLimiter();
   private messageBuffer = new DeviceMessageBuffer();
 
@@ -85,6 +88,25 @@ export class Gateway {
     if (pendingQueue.length > 0 && conn.transport !== 'poll') {
       for (const env of pendingQueue) {
         this.sendDirect(conn, env);
+      }
+    }
+  }
+
+  public registerTurboSocket(deviceId: string, ws: WebSocket) {
+    let set = this.turboSockets.get(deviceId);
+    if (!set) {
+      set = new Set();
+      this.turboSockets.set(deviceId, set);
+    }
+    set.add(ws);
+  }
+
+  public removeTurboSocket(deviceId: string, ws: WebSocket) {
+    const set = this.turboSockets.get(deviceId);
+    if (set) {
+      set.delete(ws);
+      if (set.size === 0) {
+        this.turboSockets.delete(deviceId);
       }
     }
   }
@@ -106,6 +128,65 @@ export class Gateway {
     const conn = this.connections.get(deviceId);
     if (!conn) return false;
     return this.sendDirect(conn, envelope);
+  }
+
+  /**
+   * High-speed zero-copy binary relay dispatch:
+   * - Stripes binary frames across open turbo WebSockets and primary WebSocket
+   * - Automatically falls back to Base64 JSON envelope if the recipient is on SSE/HTTP poll
+   */
+  public sendBinaryToClient(
+    deviceId: string,
+    rawFrame: Buffer | Uint8Array,
+    fromDeviceId?: string
+  ): boolean {
+    const turboSet = this.turboSockets.get(deviceId);
+    const openSockets: WebSocket[] = [];
+
+    if (turboSet && turboSet.size > 0) {
+      for (const s of turboSet) {
+        if (s.readyState === 1 /* OPEN */) openSockets.push(s);
+      }
+    }
+
+    const conn = this.connections.get(deviceId);
+    if (conn?.transport === 'ws' && conn.ws && conn.ws.readyState === 1 /* OPEN */) {
+      openSockets.push(conn.ws);
+    }
+
+    if (openSockets.length > 0) {
+      // Pick the socket with the lowest bufferedAmount (or round-robin on ties)
+      let chosen = openSockets[0];
+      if (openSockets.length > 1) {
+        const rr = (this.turboRoundRobin.get(deviceId) || 0) + 1;
+        this.turboRoundRobin.set(deviceId, rr);
+        chosen = openSockets[rr % openSockets.length];
+        for (const candidate of openSockets) {
+          if ((candidate.bufferedAmount || 0) < (chosen.bufferedAmount || 0)) {
+            chosen = candidate;
+          }
+        }
+      }
+      try {
+        chosen.send(rawFrame, { binary: true });
+        return true;
+      } catch {
+        // Fallback below
+      }
+    }
+
+    // Fallback for SSE or Long-Polling clients
+    if (conn) {
+      const b64 = Buffer.from(rawFrame.buffer, rawFrame.byteOffset, rawFrame.byteLength).toString(
+        'base64'
+      );
+      return this.sendDirect(
+        conn,
+        createEnvelope('relay-frame', { data: b64, raw: true }, { from: fromDeviceId, to: deviceId })
+      );
+    }
+
+    return false;
   }
 
   public getMissedMessages(deviceId: string, sinceTimestamp: number): SignalingEnvelope[] {
@@ -144,7 +225,7 @@ export class Gateway {
         res.json({ messages: batch });
       } else {
         (conn.pollQueue ||= []).push(envelope);
-        if (conn.pollQueue.length > 500) conn.pollQueue.shift();
+        if (conn.pollQueue.length > 1500) conn.pollQueue.shift();
       }
       return true;
     }

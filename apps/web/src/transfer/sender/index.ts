@@ -24,6 +24,8 @@ export interface FileSenderCallbacks {
   onError: (error: Error) => void;
 }
 
+const textEncoder = new TextEncoder();
+
 export class FileSenderPipeline {
   private file: File;
   private transferId: string;
@@ -45,6 +47,7 @@ export class FileSenderPipeline {
 
   private startTime = Date.now();
   private lastSpeedSampleTime = Date.now();
+  private lastActivityTime = Date.now();
   private lastAckedBytes = 0;
   private acknowledgedBytes = 0;
   private rawBytesSent = 0;
@@ -109,6 +112,7 @@ export class FileSenderPipeline {
   }
 
   public grantCredits(credits: number) {
+    this.lastActivityTime = Date.now();
     this.availableCredits = Math.min(
       this.availableCredits + credits,
       MAX_CREDIT_WINDOW_BLOCKS
@@ -140,6 +144,7 @@ export class FileSenderPipeline {
 
   public handleBlockAck(blockIndex: number, verified: boolean) {
     this.clearBlockTimer(blockIndex);
+    this.lastActivityTime = Date.now();
 
     if (!verified) {
       this.retryBlock(blockIndex);
@@ -181,6 +186,7 @@ export class FileSenderPipeline {
     this.isCancelled = false;
     this.startTime = Date.now();
     this.lastSpeedSampleTime = Date.now();
+    this.lastActivityTime = Date.now();
     await this.pump();
   }
 
@@ -191,6 +197,7 @@ export class FileSenderPipeline {
   public resume() {
     if (this.isPaused) {
       this.isPaused = false;
+      this.lastActivityTime = Date.now();
       void this.pump();
     }
   }
@@ -224,6 +231,34 @@ export class FileSenderPipeline {
     } finally {
       this.inFlight = false;
     }
+  }
+
+  private scheduleSmartBlockWatchdog(blockIndex: number) {
+    this.clearBlockTimer(blockIndex);
+    if (typeof window === 'undefined') return;
+
+    const check = () => {
+      if (
+        this.acknowledgedBlocks.has(blockIndex) ||
+        this.isCancelled ||
+        this.isPaused ||
+        this.isCompleted
+      ) {
+        return;
+      }
+      // If transport buffer is still actively draining or another block was ACKed in the last 4s,
+      // extend watchdog so we never flood the pipe with premature duplicate blocks!
+      const timeSinceLastActivity = Date.now() - this.lastActivityTime;
+      if (this.callbacks.getBufferedAmount() > 256 * 1024 || timeSinceLastActivity < 4000) {
+        const nextTimer = setTimeout(check, 4500);
+        this.blockAckTimers.set(blockIndex, nextTimer);
+        return;
+      }
+      this.retryBlock(blockIndex);
+    };
+
+    const timer = setTimeout(check, 7000);
+    this.blockAckTimers.set(blockIndex, timer);
   }
 
   private async sendBlock(blockIndex: number) {
@@ -263,10 +298,11 @@ export class FileSenderPipeline {
         chunkBytes
       );
 
+      this.lastActivityTime = Date.now();
       const maybePromise = this.callbacks.sendDataChannel(frame);
       if (maybePromise && typeof (maybePromise as Promise<void>).then === 'function') {
         await maybePromise;
-      } else if (c % 16 === 15) {
+      } else if (c % 32 === 31) {
         await new Promise((r) => setTimeout(r, 0));
       }
 
@@ -275,11 +311,11 @@ export class FileSenderPipeline {
         this.rawBytesSent = Math.min(this.file.size, currentInFlight);
       }
 
-      if (this.callbacks.onChunkProgress && (c % 8 === 0 || c === numChunks - 1)) {
+      if (this.callbacks.onChunkProgress && (c % 6 === 0 || c === numChunks - 1)) {
         const elapsed = Math.max(0.05, (Date.now() - this.startTime) / 1000);
         const honestBytes = Math.min(
           this.rawBytesSent,
-          this.acknowledgedBytes + this.blockSize * 3
+          this.acknowledgedBytes + this.blockSize * 4
         );
         this.callbacks.onChunkProgress(
           honestBytes,
@@ -296,25 +332,30 @@ export class FileSenderPipeline {
       blockHash,
       byteLength: totalBlockBytes,
     };
+
+    // 1. Send block-end over reliable control channel
     this.callbacks.sendCtlMessage({
       type: 'block-end',
       payload: blockEndPayload,
     });
 
-    // Watchdog: if block-ack does not arrive within 3.5s, re-send block-end or retransmit block
-    this.clearBlockTimer(blockIndex);
-    if (typeof window !== 'undefined') {
-      const timer = setTimeout(() => {
-        if (
-          !this.acknowledgedBlocks.has(blockIndex) &&
-          !this.isCancelled &&
-          !this.isPaused &&
-          !this.isCompleted
-        ) {
-          this.retryBlock(blockIndex);
-        }
-      }, 3500);
-      this.blockAckTimers.set(blockIndex, timer);
-    }
+    // 2. Also send in-band BinaryFrameType.CONTROL block-end frame over data route
+    // so multi-route streaming can verify immediately as soon as the chunks arrive!
+    try {
+      const ctlBytes = textEncoder.encode(JSON.stringify(blockEndPayload));
+      const inBandCtlFrame = encodeBinaryFrame(
+        {
+          type: BinaryFrameType.CONTROL,
+          transferIdNum: this.transferIdNum,
+          fileIndex: this.fileIndex,
+          blockIndex,
+          chunkIndex: numChunks,
+        },
+        ctlBytes
+      );
+      void this.callbacks.sendDataChannel(inBandCtlFrame);
+    } catch {}
+
+    this.scheduleSmartBlockWatchdog(blockIndex);
   }
 }

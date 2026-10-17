@@ -36,7 +36,7 @@
     letter-spacing: -0.02em;
   }
 
-  code, pre, .font-mono {
+  code, pre, .font-mono, .mono {
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
   }
@@ -94,6 +94,186 @@
 .mog-btn-secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.09);
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ==========================================================================
+   3D Neural Web (BriarGlobe) Device Dots & Floating Pill Nodes
+   ========================================================================== */
+.neural-sphere-device-anchor {
+  pointer-events: auto;
+  user-select: none;
+}
+
+.neural-device-cluster {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Glowing dot anchored directly onto the 3D neural web vertex */
+.neural-web-dot-wrapper {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.neural-web-dot-core {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #FFFFFF;
+  box-shadow:
+    0 0 0 2px rgba(56, 189, 248, 0.85),
+    0 0 14px 4px rgba(56, 189, 248, 0.75),
+    0 0 28px 8px rgba(168, 85, 247, 0.55);
+  z-index: 2;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.neural-web-dot-ring {
+  position: absolute;
+  inset: -5px;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(56, 189, 248, 0.65);
+  animation: neuralDotPulse 2.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes neuralDotPulse {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.95;
+  }
+  70% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+.neural-device-pill-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transform: translateY(-2px);
+}
+
+.neural-device-node {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #090B10;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 10px 28px -4px rgba(0, 0, 0, 0.65),
+    0 0 20px -2px rgba(168, 85, 247, 0.45);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.neural-device-node:hover {
+  transform: translateY(-2px) scale(1.04);
+  background: #FFFFFF;
+  box-shadow:
+    0 14px 34px -4px rgba(0, 0, 0, 0.75),
+    0 0 26px 2px rgba(56, 189, 248, 0.65);
+}
+
+.neural-device-node.ready-to-send {
+  background: linear-gradient(135deg, #FFFFFF 0%, #E0F2FE 100%);
+  border-color: #38BDF8;
+  box-shadow:
+    0 12px 30px -4px rgba(56, 189, 248, 0.55),
+    0 0 0 2px rgba(56, 189, 248, 0.45);
+}
+
+.neural-device-icon {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: #0F172A;
+  color: #38BDF8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.neural-send-indicator {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #10B981;
+  color: #050811;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px #FFFFFF;
+}
+
+.neural-device-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.neural-device-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: #090B10;
+  letter-spacing: -0.01em;
+  max-width: 135px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.neural-device-meta {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.neural-device-msg {
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #F8FAFC;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  transition: all 0.18s ease;
+}
+
+.neural-device-msg:hover {
+  background: #38BDF8;
+  color: #050811;
+  border-color: #FFFFFF;
+  transform: scale(1.08);
 }
 
 /* Custom subtle scrollbars */

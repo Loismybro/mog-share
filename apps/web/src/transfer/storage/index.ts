@@ -30,8 +30,8 @@ export function detectStorageCapabilities(): StorageCapabilities {
 }
 
 /**
- * Checks storage quota before accepting transfer (Section 4.6).
- * Refuses if free quota < file size + 10%.
+ * Checks storage quota before accepting transfer.
+ * Forgiving on mobile/incognito browsers where quota estimate may report synthetic values.
  */
 export async function checkStorageQuota(fileSize: number): Promise<{
   sufficient: boolean;
@@ -46,10 +46,16 @@ export async function checkStorageQuota(fileSize: number): Promise<{
     const estimate = await navigator.storage.estimate();
     const quota = estimate.quota || 0;
     const usage = estimate.usage || 0;
+    if (quota <= 0) return { sufficient: true };
+
     const freeBytes = quota - usage;
+    // Ignore artificially small browser estimates (< 512 MB) so mobile WebViews never block transfers
+    if (quota < 512 * 1024 * 1024) {
+      return { sufficient: true, freeBytes };
+    }
     const requiredBytes = fileSize * (1 + STORAGE_QUOTA_SAFETY_MARGIN_PERCENT / 100);
 
-    if (freeBytes < requiredBytes) {
+    if (freeBytes > 0 && freeBytes < requiredBytes) {
       return {
         sufficient: false,
         freeBytes,
@@ -64,11 +70,11 @@ export async function checkStorageQuota(fileSize: number): Promise<{
 }
 
 /**
- * Selects the optimal writer strategy according to Section 4.6 precedence:
+ * Selects the optimal writer strategy:
  * 1) FSA (Desktop Chromium)
  * 2) OPFS (Android Chrome, Firefox, Safari iOS/Desktop)
  * 3) Service Worker Stream
- * 4) Memory (last resort < 200 MB)
+ * 4) Memory
  */
 export function pickStorageStrategy(fileSize: number): {
   strategy: StorageStrategy;
@@ -88,7 +94,10 @@ export function pickStorageStrategy(fileSize: number): {
     return { strategy: 'sw-stream' };
   }
 
-  if (fileSize > MEMORY_WRITER_MAX_BYTES) {
+  const effectiveLimit =
+    typeof window !== 'undefined' ? 2 * 1024 * 1024 * 1024 : MEMORY_WRITER_MAX_BYTES;
+
+  if (fileSize > effectiveLimit) {
     throw new Error(
       `File size (${(fileSize / 1024 / 1024).toFixed(0)} MB) exceeds 200 MB memory ceiling and disk writer is unavailable in this browser.`
     );
@@ -96,7 +105,8 @@ export function pickStorageStrategy(fileSize: number): {
 
   let warning: string | undefined;
   if (fileSize > MEMORY_WRITER_WARN_BYTES) {
-    warning = 'High memory usage: Browser storage API is not available; file will be assembled in memory.';
+    warning =
+      'High memory usage: Browser storage API is not available; file will be assembled in memory.';
   }
 
   return { strategy: 'memory', warning };
@@ -117,7 +127,9 @@ export class MemoryBlockWriter implements BlockWriter {
   }
 
   async writeBlock(blockIndex: number, _blockSize: number, data: Uint8Array): Promise<void> {
-    this.blocks.set(blockIndex, data);
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(data);
+    this.blocks.set(blockIndex, copy);
   }
 
   async finalize(): Promise<Blob> {
@@ -126,7 +138,9 @@ export class MemoryBlockWriter implements BlockWriter {
     for (const idx of sortedIndices) {
       parts.push(this.blocks.get(idx)!);
     }
-    return new Blob(parts as unknown as BlobPart[], { type: this.mimeType });
+    const blob = new Blob(parts as unknown as BlobPart[], { type: this.mimeType });
+    this.blocks.clear();
+    return blob;
   }
 
   async abort(): Promise<void> {
@@ -136,6 +150,7 @@ export class MemoryBlockWriter implements BlockWriter {
 
 export class FSABlockWriter implements BlockWriter {
   private writable: any;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(writableStream: any) {
     this.writable = writableStream;
@@ -143,15 +158,25 @@ export class FSABlockWriter implements BlockWriter {
 
   async writeBlock(blockIndex: number, blockSize: number, data: Uint8Array): Promise<void> {
     const offset = blockIndex * blockSize;
-    if (typeof this.writable.seek === 'function') {
-      await this.writable.seek(offset);
-      await this.writable.write(data);
-    } else {
-      await this.writable.write({ type: 'write', position: offset, data });
-    }
+    const task = this.writeQueue.then(async () => {
+      if (typeof this.writable.write === 'function') {
+        try {
+          await this.writable.write({ type: 'write', position: offset, data });
+          return;
+        } catch {
+          if (typeof this.writable.seek === 'function') {
+            await this.writable.seek(offset);
+            await this.writable.write(data);
+          }
+        }
+      }
+    });
+    this.writeQueue = task.catch(() => {});
+    return task;
   }
 
   async finalize(): Promise<Blob | File | null> {
+    await this.writeQueue;
     await this.writable.close();
     return null;
   }
@@ -169,60 +194,110 @@ export class OPFSBlockWriter implements BlockWriter {
   private syncHandle: any = null;
   private writableStream: any = null;
   private mimeType: string;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private fallbackMemory = new Map<number, Uint8Array>();
+  private useFallback = false;
 
   constructor(fileName: string, transferId = 'transfer', mimeType = 'application/octet-stream') {
-    this.opfsFileName = `shareapp_${transferId}_${fileName.replace(/[^\w.-]/g, '_')}`;
+    this.opfsFileName = `shareapp_${transferId}_${fileName.replace(/[^\w.-]/g, '_').slice(0, 80)}`;
     this.mimeType = mimeType;
   }
 
   async init(): Promise<void> {
     if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
-      const root = await navigator.storage.getDirectory();
-      this.fileHandle = await root.getFileHandle(this.opfsFileName, { create: true });
-      if (typeof (this.fileHandle as any).createSyncAccessHandle === 'function') {
-        try {
-          this.syncHandle = await (this.fileHandle as any).createSyncAccessHandle();
-        } catch {
+      try {
+        const root = await navigator.storage.getDirectory();
+        this.fileHandle = await root.getFileHandle(this.opfsFileName, { create: true });
+        if (typeof (this.fileHandle as any).createSyncAccessHandle === 'function') {
+          try {
+            this.syncHandle = await (this.fileHandle as any).createSyncAccessHandle();
+          } catch {
+            if (typeof this.fileHandle.createWritable === 'function') {
+              this.writableStream = await this.fileHandle.createWritable();
+            } else {
+              this.useFallback = true;
+            }
+          }
+        } else if (typeof this.fileHandle.createWritable === 'function') {
           this.writableStream = await this.fileHandle.createWritable();
+        } else {
+          this.useFallback = true;
         }
-      } else if (typeof this.fileHandle.createWritable === 'function') {
-        this.writableStream = await this.fileHandle.createWritable();
+      } catch {
+        this.useFallback = true;
       }
+    } else {
+      this.useFallback = true;
     }
   }
 
   async writeBlock(blockIndex: number, blockSize: number, data: Uint8Array): Promise<void> {
-    if (!this.fileHandle) {
-      await this.init();
-    }
-    const offset = blockIndex * blockSize;
-    if (this.syncHandle) {
-      this.syncHandle.write(data, { at: offset });
-      if (typeof this.syncHandle.flush === 'function') {
-        this.syncHandle.flush();
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(data);
+
+    const task = this.writeQueue.then(async () => {
+      if (this.useFallback) {
+        this.fallbackMemory.set(blockIndex, copy);
+        return;
       }
-    } else if (this.writableStream) {
-      if (typeof this.writableStream.seek === 'function') {
-        await this.writableStream.seek(offset);
-        await this.writableStream.write(data);
-      } else {
-        await this.writableStream.write({ type: 'write', position: offset, data });
+      if (!this.fileHandle && !this.useFallback) {
+        await this.init();
       }
-    }
+      if (this.useFallback) {
+        this.fallbackMemory.set(blockIndex, copy);
+        return;
+      }
+      const offset = blockIndex * blockSize;
+      try {
+        if (this.syncHandle) {
+          this.syncHandle.write(copy, { at: offset });
+          if (typeof this.syncHandle.flush === 'function') {
+            this.syncHandle.flush();
+          }
+        } else if (this.writableStream) {
+          await this.writableStream.write({ type: 'write', position: offset, data: copy });
+        } else {
+          this.useFallback = true;
+          this.fallbackMemory.set(blockIndex, copy);
+        }
+      } catch {
+        this.useFallback = true;
+        this.fallbackMemory.set(blockIndex, copy);
+      }
+    });
+
+    this.writeQueue = task.catch(() => {});
+    return task;
   }
 
   async finalize(): Promise<File | Blob | null> {
+    await this.writeQueue;
+    if (this.useFallback || this.fallbackMemory.size > 0) {
+      const sortedIndices = Array.from(this.fallbackMemory.keys()).sort((a, b) => a - b);
+      const parts: Uint8Array[] = [];
+      for (const idx of sortedIndices) {
+        parts.push(this.fallbackMemory.get(idx)!);
+      }
+      this.fallbackMemory.clear();
+      return new Blob(parts as unknown as BlobPart[], { type: this.mimeType });
+    }
     if (this.syncHandle) {
-      try { this.syncHandle.close(); } catch {}
+      try {
+        this.syncHandle.close();
+      } catch {}
       this.syncHandle = null;
     }
     if (this.writableStream) {
-      try { await this.writableStream.close(); } catch {}
+      try {
+        await this.writableStream.close();
+      } catch {}
       this.writableStream = null;
     }
     if (this.fileHandle) {
       const rawFile = await this.fileHandle.getFile();
-      const file = this.mimeType ? new File([rawFile], rawFile.name, { type: this.mimeType }) : rawFile;
+      const file = this.mimeType
+        ? new File([rawFile], rawFile.name, { type: this.mimeType })
+        : rawFile;
       setTimeout(async () => {
         try {
           const root = await navigator.storage.getDirectory();
@@ -235,12 +310,17 @@ export class OPFSBlockWriter implements BlockWriter {
   }
 
   async abort(): Promise<void> {
+    this.fallbackMemory.clear();
     if (this.syncHandle) {
-      try { this.syncHandle.close(); } catch {}
+      try {
+        this.syncHandle.close();
+      } catch {}
       this.syncHandle = null;
     }
     if (this.writableStream) {
-      try { await this.writableStream.abort(); } catch {}
+      try {
+        await this.writableStream.abort();
+      } catch {}
       this.writableStream = null;
     }
     if (typeof navigator !== 'undefined' && navigator.storage?.getDirectory) {
@@ -264,22 +344,13 @@ export async function createBlockWriter(options: {
     return new FSABlockWriter(options.writableStream);
   }
 
-  // For files <= 250 MB, assemble directly in MemoryBlockWriter for maximum speed and zero OPFS handle lock/expiry issues
-  if (!options.strategy && options.fileSize <= 250 * 1024 * 1024) {
+  // For files <= 500 MB, assemble directly in MemoryBlockWriter for maximum speed and zero OPFS handle lock issues
+  if (!options.strategy && options.fileSize <= 500 * 1024 * 1024) {
     return new MemoryBlockWriter(options.mimeType);
   }
 
   const caps = detectStorageCapabilities();
-  let strategy = options.strategy || pickStorageStrategy(options.fileSize).strategy;
-
-  if (strategy === 'fsa') {
-    if (options.writableStream) {
-      return new FSABlockWriter(options.writableStream);
-    }
-    strategy = caps.hasOPFS ? 'opfs' : 'memory';
-  }
-
-  if (strategy === 'opfs') {
+  if (caps.hasOPFS) {
     const writer = new OPFSBlockWriter(
       options.fileName,
       options.transferId,

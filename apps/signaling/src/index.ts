@@ -315,6 +315,58 @@ app.get('/api/events', (req, res) => {
   });
 });
 
+// High-Speed HTTP Binary Burst Backup Route (Route 3)
+app.post(
+  '/api/turbo-relay',
+  express.raw({ type: 'application/octet-stream', limit: '16mb' }),
+  (req, res) => {
+    try {
+      const fromId = (req.query.from as string) || (req.headers['x-from-device'] as string) || '';
+      const toId = (req.query.to as string) || (req.headers['x-to-device'] as string) || '';
+      if (!fromId || !toId) {
+        res.status(400).json({ error: 'Missing from or to deviceId' });
+        return;
+      }
+      const body = req.body as Buffer;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'Empty binary payload' });
+        return;
+      }
+      groupIndex.cancelDisconnect(fromId);
+      if (!verifyPeerSharing(fromId, toId)) {
+        res.status(403).json({ error: 'Unauthorized peer route' });
+        return;
+      }
+      if (!relayLimiter.canRelay(fromId, body.length)) {
+        res.status(429).json({ error: 'Relay limit exceeded' });
+        return;
+      }
+      metrics.totalRelayBytes += body.length;
+
+      // Support packed multi-frame burst header [0x4D, 0x42] ("MB") or single raw frame
+      if (body.length >= 6 && body[0] === 0x4d && body[1] === 0x42) {
+        let offset = 2;
+        while (offset + 4 <= body.length) {
+          const frameLen = body.readUInt32BE(offset);
+          offset += 4;
+          if (frameLen <= 0 || offset + frameLen > body.length) break;
+          const slice = body.subarray(offset, offset + frameLen);
+          gateway.sendBinaryToClient(toId, slice, fromId);
+          metrics.totalMessagesRelayed++;
+          offset += frameLen;
+        }
+      } else {
+        gateway.sendBinaryToClient(toId, body, fromId);
+        metrics.totalMessagesRelayed++;
+      }
+
+      res.status(200).json({ ok: true });
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  }
+);
+
 // Transport ladder: POST up
 app.post('/api/message', (req, res) => {
   try {
@@ -411,7 +463,7 @@ const roomPruneInterval = setInterval(() => {
 roomPruneInterval.unref?.();
 
 // ---------------------------------------------------------------------------
-// WebSocket Gateway Handling
+// WebSocket Gateway Handling (Control + Multi-Lane Binary Turbo Relay)
 // ---------------------------------------------------------------------------
 wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   if (ALLOWED_ORIGIN !== '*') {
@@ -430,12 +482,58 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
 
   const { clientIp } = extractVerifiedClientIp(req);
   let boundDeviceId: string | null = null;
+  let isTurboLane = false;
 
-  ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+  try {
+    const reqUrl = new URL(req.url || '/ws', 'http://localhost');
+    const qDeviceId = reqUrl.searchParams.get('deviceId');
+    const qTurbo = reqUrl.searchParams.get('turbo');
+    if (qDeviceId && qTurbo === '1') {
+      boundDeviceId = qDeviceId;
+      isTurboLane = true;
+      groupIndex.cancelDisconnect(qDeviceId);
+      gateway.registerTurboSocket(qDeviceId, ws);
+    }
+  } catch {
+    /* ignore URL parse error */
+  }
+
+  ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary?: boolean) => {
+    // Fast-path: Zero-copy binary relay frame starting with magic bytes [0x4D, 0x47] ("MG")
+    // Format: [0x4D, 0x47, targetIdLen (1B), ...targetIdUtf8, ...rawFramePayload]
+    const buf = Buffer.isBuffer(data)
+      ? data
+      : data instanceof ArrayBuffer
+      ? Buffer.from(data)
+      : Array.isArray(data)
+      ? Buffer.concat(data)
+      : null;
+
+    if (buf && (isBinary || (buf.length > 4 && buf[0] === 0x4d && buf[1] === 0x47))) {
+      if (buf.length > 4 && buf[0] === 0x4d && buf[1] === 0x47) {
+        const targetIdLen = buf[2];
+        if (targetIdLen > 0 && 3 + targetIdLen < buf.length) {
+          const targetId = buf.subarray(3, 3 + targetIdLen).toString('utf8');
+          const rawFramePayload = buf.subarray(3 + targetIdLen);
+          const senderId = boundDeviceId || 'turbo';
+          if (boundDeviceId) {
+            groupIndex.cancelDisconnect(boundDeviceId);
+          }
+          if (!boundDeviceId || verifyPeerSharing(boundDeviceId, targetId)) {
+            if (relayLimiter.canRelay(senderId, rawFramePayload.length)) {
+              metrics.totalRelayBytes += rawFramePayload.length;
+              metrics.totalMessagesRelayed++;
+              gateway.sendBinaryToClient(targetId, rawFramePayload, boundDeviceId || undefined);
+            }
+          }
+          return;
+        }
+      }
+    }
+
     let rawStr = '';
-    if (Buffer.isBuffer(data)) rawStr = data.toString('utf8');
-    else if (data instanceof ArrayBuffer) rawStr = new TextDecoder().decode(data);
-    else rawStr = data.toString();
+    if (buf) rawStr = buf.toString('utf8');
+    else rawStr = String(data);
 
     let envelope: SignalingEnvelope;
     try {
@@ -449,7 +547,13 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       const fromId = envelope.from;
       boundDeviceId = fromId;
       groupIndex.cancelDisconnect(fromId);
-      gateway.registerConnection({ deviceId: fromId, transport: 'ws', ws });
+      if (isTurboLane || envelope.type === 'register-turbo') {
+        isTurboLane = true;
+        gateway.registerTurboSocket(fromId, ws);
+        if (envelope.type === 'register-turbo') return;
+      } else {
+        gateway.registerConnection({ deviceId: fromId, transport: 'ws', ws });
+      }
     }
 
     if (envelope.type !== 'relay-frame' && boundDeviceId && !gateway.checkRateLimit(boundDeviceId)) {
@@ -463,6 +567,10 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   ws.on('close', () => {
     metrics.activeSessions = Math.max(0, metrics.activeSessions - 1);
     if (boundDeviceId) {
+      if (isTurboLane) {
+        gateway.removeTurboSocket(boundDeviceId, ws);
+        return;
+      }
       const cur = gateway.getConnection(boundDeviceId);
       if (cur && cur.ws !== ws) return;
       const departingId = boundDeviceId;

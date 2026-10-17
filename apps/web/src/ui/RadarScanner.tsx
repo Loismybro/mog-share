@@ -10,6 +10,7 @@ import {
   Send,
   ShieldCheck,
   Radio,
+  Zap,
 } from 'lucide-react';
 import type { Device, Platform } from '../types';
 import BriarGlobe from './BriarGlobe';
@@ -71,9 +72,9 @@ export const RadarScanner: React.FC<RadarScannerProps> = ({
             <Wifi className="w-3.5 h-3.5 text-sky-400" />
             <span>
               {peers.length > 0
-                ? `${peers.length} Nearby ${peers.length === 1 ? 'Device' : 'Devices'}`
+                ? `${peers.length} Active ${peers.length === 1 ? 'Device' : 'Devices'} on Web`
                 : isScanning
-                ? 'Scanning Nearby Devices…'
+                ? 'Scanning Nearby & Online Devices…'
                 : 'Ready to Discover'}
             </span>
           </div>
@@ -99,33 +100,26 @@ export const RadarScanner: React.FC<RadarScannerProps> = ({
         </button>
       </div>
 
-      {/* 3D Discovery Sphere */}
-      <div className="relative w-full h-[330px] sm:h-[380px] rounded-2xl overflow-hidden mog-glass border border-white/10">
+      {/* 3D Discovery Sphere with Interactive Web Dots & Device Nodes */}
+      <div className="relative w-full h-[350px] sm:h-[400px] rounded-2xl overflow-hidden mog-glass border border-white/10">
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
             background:
-              'radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.14) 0%, rgba(99, 102, 241, 0.07) 45%, rgba(7, 9, 15, 0) 75%)',
+              'radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.16) 0%, rgba(168, 85, 247, 0.10) 45%, rgba(7, 9, 15, 0) 75%)',
           }}
         />
 
         <BriarGlobe
+          devices={peers}
           peers={peers}
+          onSelectDevice={onSelectPeer}
           onSelectPeer={onSelectPeer}
+          onMessageDevice={onChatPeer}
           onChatPeer={onChatPeer}
+          hasStagedFiles={selectedFilesCount > 0}
           selectedFilesCount={selectedFilesCount}
-          density={5}
-          glow={6}
-          motion={5}
-          interactive={true}
           background="transparent"
-          palette={{
-            ink: '#07090F',
-            primary: '#1E293B',
-            secondary: '#38BDF8',
-            accent: '#818CF8',
-            highlight: '#F8FAFC',
-          }}
           style={{ width: '100%', height: '100%' }}
         />
 
@@ -152,8 +146,8 @@ export const RadarScanner: React.FC<RadarScannerProps> = ({
           <Radio className="w-3.5 h-3.5 text-sky-400" />
           <span>
             {peers.length > 0
-              ? 'Select a device node to send files'
-              : 'Waiting for nearby or room devices…'}
+              ? 'Tap any glowing device dot on the web to send'
+              : 'Hover dots on the web • Waiting for devices…'}
           </span>
         </div>
       </div>
@@ -186,11 +180,12 @@ export const RadarScanner: React.FC<RadarScannerProps> = ({
                             : 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30'
                         }`}
                       >
-                        {isOnlineRoom ? 'ROOM' : 'LAN'}
+                        {isOnlineRoom ? 'ZAP ROOM' : 'LAN 4X'}
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-400 truncate">
-                      {peer.model || peer.platform} • Direct P2P Ready
+                    <p className="text-[11px] text-slate-400 truncate flex items-center gap-1">
+                      <Zap className="w-3 h-3 text-sky-400 shrink-0" />
+                      <span>{peer.model || peer.platform} • Multi-Route Ready</span>
                     </p>
                   </div>
                 </div>
@@ -218,7 +213,7 @@ export const RadarScanner: React.FC<RadarScannerProps> = ({
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg mog-btn-primary text-xs font-bold cursor-pointer"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    <span>{selectedFilesCount > 0 ? 'Send Now' : 'Send'}</span>
+                    <span>{selectedFilesCount > 0 ? 'Send All' : 'Send'}</span>
                   </button>
                 </div>
               </div>

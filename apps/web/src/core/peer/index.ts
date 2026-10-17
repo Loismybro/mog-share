@@ -33,6 +33,8 @@ export interface PeerSessionOptions {
   onConnectionChange?: (state: RTCPeerConnectionState) => void;
 }
 
+const PARALLEL_DATA_CHANNEL_COUNT = 4;
+
 export class PeerSession {
   public readonly localDeviceId: string;
   public readonly remoteDeviceId: string;
@@ -41,6 +43,8 @@ export class PeerSession {
   private pc: RTCPeerConnection;
   private ctlChannel: RTCDataChannel;
   private dataChannel: RTCDataChannel;
+  private dataChannels: RTCDataChannel[] = [];
+  private dataRoundRobin = 0;
 
   private makingOffer = false;
   private ignoreOffer = false;
@@ -72,7 +76,7 @@ export class PeerSession {
 
     this.pc = new RTCPeerConnection(config);
 
-    // IMPORTANT: Attach PeerConnection handlers BEFORE createDataChannel so WebKit/iPadOS
+    // Attach PeerConnection handlers BEFORE createDataChannel so WebKit/iPadOS
     // and Chromium never miss the initial negotiationneeded event!
     this.setupPeerConnectionHandlers();
 
@@ -83,13 +87,20 @@ export class PeerSession {
     });
     this.ctlChannel.binaryType = 'arraybuffer';
 
-    this.dataChannel = this.pc.createDataChannel('data', {
-      id: 1,
-      negotiated: true,
-      ordered: true,
-    });
-    this.dataChannel.binaryType = 'arraybuffer';
-    this.dataChannel.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW_THRESHOLD;
+    // Create 4 parallel negotiated high-speed data channels (ids 1..4)
+    // unordered: true eliminates SCTP head-of-line blocking on WAN/mobile links
+    // because MogShare frames carry explicit (blockIndex, chunkIndex) headers!
+    for (let i = 0; i < PARALLEL_DATA_CHANNEL_COUNT; i++) {
+      const ch = this.pc.createDataChannel(i === 0 ? 'data' : `data-${i + 1}`, {
+        id: i + 1,
+        negotiated: true,
+        ordered: false,
+      });
+      ch.binaryType = 'arraybuffer';
+      ch.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW_THRESHOLD;
+      this.dataChannels.push(ch);
+    }
+    this.dataChannel = this.dataChannels[0];
 
     this.setupDataChannelHandlers();
     this.startStatsPoller();
@@ -97,8 +108,6 @@ export class PeerSession {
       this.flushCtlQueue();
     }
 
-    // Explicitly kick off negotiation if the browser did not fire onnegotiationneeded
-    // (common with { negotiated: true } channels on Safari/WebKit and mobile browsers)
     if (!this.isPolite) {
       queueMicrotask(() => {
         void this.ensureNegotiationStarted();
@@ -108,7 +117,7 @@ export class PeerSession {
         if (!this.closed && this.pc.signalingState === 'stable' && !this.pc.remoteDescription) {
           void this.ensureNegotiationStarted();
         }
-      }, 900);
+      }, 800);
     }
   }
 
@@ -128,6 +137,14 @@ export class PeerSession {
     return this.dataChannel;
   }
 
+  public isAnyDataOpen(): boolean {
+    return this.dataChannels.some((ch) => ch.readyState === 'open');
+  }
+
+  public getOpenDataChannelCount(): number {
+    return this.dataChannels.filter((ch) => ch.readyState === 'open').length;
+  }
+
   public get rtcPeerConnection(): RTCPeerConnection {
     return this.pc;
   }
@@ -136,7 +153,7 @@ export class PeerSession {
     if (
       this.closed ||
       this.makingOffer ||
-      this.dataChannel.readyState === 'open'
+      this.isAnyDataOpen()
     ) {
       return;
     }
@@ -145,7 +162,11 @@ export class PeerSession {
     }
     try {
       this.makingOffer = true;
-      if (this.pc.localDescription && this.pc.connectionState !== 'connected' && this.pc.connectionState !== 'connecting') {
+      if (
+        this.pc.localDescription &&
+        this.pc.connectionState !== 'connected' &&
+        this.pc.connectionState !== 'connecting'
+      ) {
         try {
           this.pc.restartIce();
         } catch {
@@ -211,21 +232,27 @@ export class PeerSession {
       this.options.onCtlMessage?.(ev.data);
     };
 
-    this.dataChannel.onopen = () => {
-      this.options.onDataOpen?.();
-    };
+    let notifiedOpen = false;
+    for (const ch of this.dataChannels) {
+      ch.onopen = () => {
+        if (!notifiedOpen) {
+          notifiedOpen = true;
+          this.options.onDataOpen?.();
+        }
+      };
 
-    this.dataChannel.onmessage = (ev) => {
-      const bytes =
-        ev.data instanceof ArrayBuffer
-          ? new Uint8Array(ev.data)
-          : ev.data instanceof Uint8Array
-          ? ev.data
-          : new Uint8Array(0);
-      if (bytes.byteLength > 0) {
-        this.options.onDataFrame?.(bytes);
-      }
-    };
+      ch.onmessage = (ev) => {
+        const bytes =
+          ev.data instanceof ArrayBuffer
+            ? new Uint8Array(ev.data)
+            : ev.data instanceof Uint8Array
+            ? ev.data
+            : new Uint8Array(0);
+        if (bytes.byteLength > 0) {
+          this.options.onDataFrame?.(bytes);
+        }
+      };
+    }
   }
 
   private serializeSdp(
@@ -414,45 +441,71 @@ export class PeerSession {
     }
   }
 
+  /**
+   * Stripes binary frames across all 4 parallel WebRTC DataChannels,
+   * selecting the channel with the lowest bufferedAmount for maximum throughput!
+   */
   public sendData(frame: Uint8Array) {
-    if (this.dataChannel.readyState === 'open') {
+    const openChannels = this.dataChannels.filter((ch) => ch.readyState === 'open');
+    if (openChannels.length > 0) {
+      this.dataRoundRobin = (this.dataRoundRobin + 1) % openChannels.length;
+      let target = openChannels[this.dataRoundRobin];
+      for (const ch of openChannels) {
+        if ((ch.bufferedAmount || 0) < (target.bufferedAmount || 0)) {
+          target = ch;
+        }
+      }
       const buf =
         frame.byteOffset === 0 && frame.byteLength === frame.buffer.byteLength
           ? frame.buffer
           : frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
-      this.dataChannel.send(buf as ArrayBuffer);
+      target.send(buf as ArrayBuffer);
     } else {
       throw new Error('Data channel is not open');
     }
   }
 
   public getBufferedAmount(): number {
-    return this.dataChannel ? this.dataChannel.bufferedAmount : 0;
+    const openChannels = this.dataChannels.filter((ch) => ch.readyState === 'open');
+    if (openChannels.length === 0) return 0;
+    let minBuffered = Infinity;
+    for (const ch of openChannels) {
+      const b = ch.bufferedAmount || 0;
+      if (b < minBuffered) minBuffered = b;
+    }
+    return minBuffered === Infinity ? 0 : minBuffered;
   }
 
   public waitForBufferedAmountLow(): Promise<void> {
-    const dc = this.dataChannel;
-    if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
+    const openChannels = this.dataChannels.filter((ch) => ch.readyState === 'open');
+    if (openChannels.length === 0) return Promise.resolve();
+    let best = openChannels[0];
+    for (const ch of openChannels) {
+      if ((ch.bufferedAmount || 0) < (best.bufferedAmount || 0)) {
+        best = ch;
+      }
+    }
+    if ((best.bufferedAmount || 0) <= (best.bufferedAmountLowThreshold || BUFFERED_AMOUNT_LOW_THRESHOLD)) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
       const done = () => {
-        dc.removeEventListener('bufferedamountlow', done);
-        dc.removeEventListener('close', done);
-        dc.removeEventListener('error', done);
+        best.removeEventListener('bufferedamountlow', done);
+        best.removeEventListener('close', done);
+        best.removeEventListener('error', done);
         clearTimeout(guard);
         resolve();
       };
-      const guard = setTimeout(done, 2500);
-      dc.addEventListener('bufferedamountlow', done);
-      dc.addEventListener('close', done);
-      dc.addEventListener('error', done);
+      const guard = setTimeout(done, 1200);
+      best.addEventListener('bufferedamountlow', done);
+      best.addEventListener('close', done);
+      best.addEventListener('error', done);
     });
   }
 
   public whenDataOpen(timeoutMs = 6000): Promise<boolean> {
+    if (this.isAnyDataOpen()) return Promise.resolve(true);
     const dc = this.dataChannel;
-    if (dc.readyState === 'open') return Promise.resolve(true);
     if (dc.readyState === 'closing' || dc.readyState === 'closed') return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       const finish = (ok: boolean) => {
@@ -547,9 +600,11 @@ export class PeerSession {
     try {
       this.ctlChannel.close();
     } catch {}
-    try {
-      this.dataChannel.close();
-    } catch {}
+    for (const ch of this.dataChannels) {
+      try {
+        ch.close();
+      } catch {}
+    }
     try {
       this.pc.close();
     } catch {}

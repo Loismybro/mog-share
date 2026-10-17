@@ -19,9 +19,13 @@ export async function handleTurnCredentialsRequest(
     const publicStun: IceServerConfig[] = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+      { urls: 'stun:stun.nextcloud.com:443' },
     ];
-    // No TURN host configured: return public STUN only (never dead placeholder hosts).
+    // No TURN host configured: return multi-region public STUN pool
     if (!turnRealm) {
       res.json({ iceServers: publicStun, ttl: 0, expiryUnix: 0, turn: false });
       return;

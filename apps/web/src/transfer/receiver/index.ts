@@ -21,6 +21,8 @@ export interface FileReceiverCallbacks {
   onError: (error: Error) => void;
 }
 
+const textDecoder = new TextDecoder();
+
 export class FileReceiverPipeline {
   private transferId: string;
   private totalBytes: number;
@@ -74,6 +76,23 @@ export class FileReceiverPipeline {
     }
   }
 
+  private resetStallTimer(blockIndex: number) {
+    this.clearStallTimer(blockIndex);
+    if (typeof window === 'undefined' || this.verifiedBlocks.has(blockIndex) || this.finalized) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (!this.verifiedBlocks.has(blockIndex) && !this.finalized) {
+        // Keep already-received valid chunks in memory and request block retransmission
+        this.callbacks.sendCtlMessage({
+          type: 'block-retry',
+          payload: { transferId: this.transferId, blockIndex },
+        });
+      }
+    }, 5500);
+    this.blockStallTimers.set(blockIndex, timer);
+  }
+
   public getVerifiedBlocks(): Set<number> {
     return new Set(this.verifiedBlocks);
   }
@@ -86,6 +105,17 @@ export class FileReceiverPipeline {
     try {
       const { header, payload } = decodeBinaryFrame(rawFrame);
       if (header.transferIdNum !== this.transferIdNum) return;
+
+      if (header.type === BinaryFrameType.CONTROL) {
+        try {
+          const endPayload = JSON.parse(textDecoder.decode(payload)) as BlockEndPayload;
+          if (endPayload && typeof endPayload.blockIndex === 'number') {
+            this.handleBlockEnd(endPayload);
+          }
+        } catch {}
+        return;
+      }
+
       if (header.type === BinaryFrameType.DATA) {
         if (this.verifiedBlocks.has(header.blockIndex)) return;
 
@@ -94,15 +124,24 @@ export class FileReceiverPipeline {
           chunksMap = new Map();
           this.blockChunks.set(header.blockIndex, chunksMap);
         }
+
+        // Copy payload slice so underlying buffer reuse never mutates stored chunk
+        const chunkCopy = new Uint8Array(payload.byteLength);
+        chunkCopy.set(payload);
+
         const prevChunk = chunksMap.get(header.chunkIndex);
-        chunksMap.set(header.chunkIndex, payload);
+        chunksMap.set(header.chunkIndex, chunkCopy);
 
         const prevBlockBytes = this.blockReceivedBytes.get(header.blockIndex) || 0;
-        const delta = payload.byteLength - (prevChunk ? prevChunk.byteLength : 0);
+        const delta = chunkCopy.byteLength - (prevChunk ? prevChunk.byteLength : 0);
         const nextBlockBytes = prevBlockBytes + delta;
         this.blockReceivedBytes.set(header.blockIndex, nextBlockBytes);
 
-        if (header.chunkIndex % 6 === 0) {
+        if (this.blockEndPayloads.has(header.blockIndex)) {
+          this.resetStallTimer(header.blockIndex);
+        }
+
+        if (header.chunkIndex % 4 === 0) {
           let inFlightBytes = 0;
           for (const [bIdx, bBytes] of this.blockReceivedBytes.entries()) {
             if (!this.verifiedBlocks.has(bIdx)) inFlightBytes += bBytes;
@@ -124,7 +163,6 @@ export class FileReceiverPipeline {
 
   public handleBlockEnd(payload: BlockEndPayload) {
     if (this.verifiedBlocks.has(payload.blockIndex)) {
-      // Re-acknowledge if sender missed previous ACK
       this.callbacks.sendCtlMessage({
         type: 'block-ack',
         payload: {
@@ -140,21 +178,8 @@ export class FileReceiverPipeline {
     this.blockEndPayloads.set(payload.blockIndex, payload);
     void this.tryVerifyBlock(payload.blockIndex);
 
-    // If chunks are still missing 1.8s after block-end, request block retry so receiver never stalls at 99%
-    if (typeof window !== 'undefined' && !this.verifiedBlocks.has(payload.blockIndex)) {
-      this.clearStallTimer(payload.blockIndex);
-      const timer = setTimeout(() => {
-        if (!this.verifiedBlocks.has(payload.blockIndex) && !this.finalized) {
-          this.blockChunks.delete(payload.blockIndex);
-          this.blockReceivedBytes.delete(payload.blockIndex);
-          this.blockEndPayloads.delete(payload.blockIndex);
-          this.callbacks.sendCtlMessage({
-            type: 'block-retry',
-            payload: { transferId: this.transferId, blockIndex: payload.blockIndex },
-          });
-        }
-      }, 1800);
-      this.blockStallTimers.set(payload.blockIndex, timer);
+    if (!this.verifiedBlocks.has(payload.blockIndex)) {
+      this.resetStallTimer(payload.blockIndex);
     }
   }
 
@@ -167,6 +192,19 @@ export class FileReceiverPipeline {
       this.callbacks.onError(err as Error);
     } finally {
       this.verifying.delete(blockIndex);
+      // If more chunks arrived while we were awaiting verification and block is still unverified, re-check
+      if (
+        !this.verifiedBlocks.has(blockIndex) &&
+        !this.finalized &&
+        this.blockEndPayloads.has(blockIndex) &&
+        this.blockChunks.has(blockIndex)
+      ) {
+        const endMeta = this.blockEndPayloads.get(blockIndex)!;
+        const recBytes = this.blockReceivedBytes.get(blockIndex) || 0;
+        if (recBytes >= endMeta.byteLength) {
+          void this.tryVerifyBlock(blockIndex);
+        }
+      }
     }
   }
 
@@ -193,7 +231,6 @@ export class FileReceiverPipeline {
     this.clearStallTimer(blockIndex);
 
     if (totalReceived !== endMeta.byteLength) {
-      // Corrupted or mismatched chunk sizing — request clean block retry
       this.blockChunks.delete(blockIndex);
       this.blockReceivedBytes.delete(blockIndex);
       this.blockEndPayloads.delete(blockIndex);

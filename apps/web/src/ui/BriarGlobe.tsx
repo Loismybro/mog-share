@@ -8,14 +8,14 @@ const FILL = 0.86;
 const CAMERA = 3.4;
 const CAMERA_NEAR = 0.6;
 const SILHOUETTE = CAMERA / Math.sqrt(CAMERA * CAMERA - 1);
-const KNOT_SIZE = 3.2;
+const KNOT_SIZE = 5.4;
 const MAX_POINT_PX = 48;
 const DEPTH_CURVE = 1.6;
 const MESH_LINKS = 3;
 const INTERIOR_SHARE = 0.16;
 const HUB_REACH = 0.75;
 const CHORD_SHARE = 0.3;
-const ACCENT_SHARE = 0.28;
+const ACCENT_SHARE = 0.34;
 const MAX_EDGES = 24000;
 const FRONT_T = 0.45;
 const HOLD_REACH = 1.35;
@@ -46,8 +46,8 @@ const GLOW_FADE = 0.08;
 const INTRO_STAGGER = 0.4;
 const INTRO_BACK = 1.1;
 const INTRO_LINE_FLOOR = 0.12;
-const INTRO_POINT_SIZE = 2.6;
-const INTRO_POINT_ALPHA = 0.85;
+const INTRO_POINT_SIZE = 3.5;
+const INTRO_POINT_ALPHA = 0.92;
 const INTRO_FADE_IN = 0.5;
 const MAX_SPIN = 0.5;
 const SEED = 0xb41a4;
@@ -67,8 +67,8 @@ export interface BriarGlobeNetwork {
 }
 
 const DEFAULT_NETWORK: BriarGlobeNetwork = {
-  nodes: 900,
-  hubs: 32,
+  nodes: 920,
+  hubs: 64,
   links: 5,
 };
 
@@ -82,9 +82,9 @@ export interface BriarGlobeLines {
 
 const DEFAULT_LINES: BriarGlobeLines = {
   color: "#FFFFFF",
-  accent: "#8400FF",
-  thickness: 0.58,
-  opacity: 5.5,
+  accent: "#A855F7",
+  thickness: 0.65,
+  opacity: 6.2,
   depth: 9,
 };
 
@@ -683,9 +683,13 @@ interface Params {
 export interface BriarGlobeProps {
   labels?: string[];
   devices?: Device[];
+  peers?: Device[];
   onSelectDevice?: (device: Device) => void;
+  onSelectPeer?: (device: Device) => void;
   onMessageDevice?: (device: Device) => void;
+  onChatPeer?: (device: Device) => void;
   hasStagedFiles?: boolean;
+  selectedFilesCount?: number;
   background?: string;
   font?: CSSProperties;
   textColor?: string;
@@ -698,43 +702,52 @@ export interface BriarGlobeProps {
   speed?: number;
   direction?: "left" | "right";
   tilt?: number;
-  motion?: Partial<BriarGlobeMotion>;
+  motion?: Partial<BriarGlobeMotion> | number;
+  density?: number;
+  glow?: number;
+  interactive?: boolean;
+  palette?: Record<string, string>;
   style?: CSSProperties;
   className?: string;
 }
 
-function platformIcon(platform: Platform, size = 16) {
-  if (platform === "ios" || platform === "android")
+function platformIcon(platform: Platform, size = 14) {
+  const p = String(platform || "web").toLowerCase();
+  if (p === "ios" || p === "android")
     return <Smartphone size={size} aria-hidden />;
-  if (platform === "web") return <MonitorSmartphone size={size} aria-hidden />;
+  if (p === "web") return <MonitorSmartphone size={size} aria-hidden />;
   return <Laptop size={size} aria-hidden />;
 }
 
 function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
   const {
     labels,
-    devices = [],
+    devices,
+    peers,
     onSelectDevice,
+    onSelectPeer,
     onMessageDevice,
-    hasStagedFiles = false,
+    onChatPeer,
+    hasStagedFiles,
+    selectedFilesCount,
     background = "transparent",
     font = DEFAULT_FONT,
     textColor = "#0A090B",
-    network = { hubs: 32, links: 5, nodes: 900 },
+    network = { hubs: 64, links: 5, nodes: 920 },
     lines = {
       color: "#FFFFFF",
-      depth: 10,
-      accent: "#8400FF",
-      opacity: 5.5,
-      thickness: 0.58,
+      depth: 9,
+      accent: "#A855F7",
+      opacity: 6.2,
+      thickness: 0.65,
     },
-    intro = { play: true, delay: 0.2, inflate: 1.4, duration: 2.2 },
+    intro = { play: true, delay: 0.1, inflate: 1.35, duration: 1.8 },
     hover = {
       lag: 3.9,
-      glow: "#A200FF",
-      pill: "rgba(255, 255, 255, 0.88)",
-      reach: 18,
-      glowSize: 130,
+      glow: "#38BDF8",
+      pill: "rgba(255, 255, 255, 0.94)",
+      reach: 22,
+      glowSize: 140,
     },
     parallax = 9,
     smoothing = 10,
@@ -746,27 +759,43 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
     className,
   } = props;
 
+  const resolvedDevices = useMemo(
+    () => (devices && devices.length > 0 ? devices : peers || []),
+    [devices, peers]
+  );
+  const handleSelectDevice = onSelectDevice || onSelectPeer;
+  const handleMessageDevice = onMessageDevice || onChatPeer;
+  const stagedActive =
+    hasStagedFiles !== undefined
+      ? hasStagedFiles
+      : (selectedFilesCount || 0) > 0;
+
   const resolvedNetwork = { ...DEFAULT_NETWORK, ...network };
   const resolvedLines = { ...DEFAULT_LINES, ...lines };
   const resolvedIntro = { ...DEFAULT_INTRO, ...intro };
   const resolvedHover = { ...DEFAULT_HOVER, ...hover };
-  const resolvedMotion = { ...DEFAULT_MOTION, ...motionSettings };
+  const resolvedMotion: BriarGlobeMotion =
+    typeof motionSettings === "number"
+      ? { ...DEFAULT_MOTION, amount: motionSettings }
+      : { ...DEFAULT_MOTION, ...motionSettings };
   const pillFont: CSSProperties = { ...DEFAULT_FONT, ...font };
 
   const dynamicLabels = useMemo(() => {
     if (labels && labels.length > 0) return labels;
-    if (devices.length > 0) {
-      return devices.map((d) => `${d.name} · ${d.model || d.os || "Ready"}`);
+    if (resolvedDevices.length > 0) {
+      return resolvedDevices.map(
+        (d) => `${d.name} · ${d.model || d.os || "Direct P2P"}`
+      );
     }
     return [
-      "Neural Mesh Active",
       "Zero-Data Local Wi-Fi",
-      "Direct WebRTC P2P",
+      "4x Multi-Route WebRTC",
+      "Binary Turbo Relay",
       "SHA-256 Verified",
-      "Cross-Platform Radar",
-      "Listening for Devices",
+      "Cross-Platform Discovery",
+      "Ready to Pair & Send",
     ];
-  }, [labels, devices]);
+  }, [labels, resolvedDevices]);
 
   const words = dynamicLabels.filter(
     (line) => typeof line === "string" && line.trim()
@@ -787,8 +816,8 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
   const graphRef = useRef(graph);
   graphRef.current = graph;
 
-  const devicesRef = useRef(devices);
-  devicesRef.current = devices;
+  const devicesRef = useRef(resolvedDevices);
+  devicesRef.current = resolvedDevices;
 
   const amount = clamp(resolvedMotion.amount, 0, 10) / 10;
   const moveStyle = resolvedMotion.style;
@@ -1072,7 +1101,7 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
       placeAll(g, pose, radiusPx(), width / 2, height / 2, sx, sy, st);
     }
 
-    // Update 3D projected coordinates for discovered device neural nodes
+    // Update 3D projected coordinates for discovered device dots + pills on the neural web
     function updateDeviceNodes3D() {
       const devs = devicesRef.current;
       const count = devs.length;
@@ -1085,29 +1114,32 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
         const el = deviceNodesRef.current[idx];
         if (!el) continue;
 
-        // Place discovered devices in a balanced 3D orbital band on the front hemisphere
-        // with gentle organic 3D oscillation so they feel embedded in the neural sphere
+        // Position device nodes in a balanced 3D orbital band on the front hemisphere of the web
+        const baseAngle =
+          count === 1
+            ? -0.35
+            : ((idx * (360 / Math.max(count, 1)) - 40) * Math.PI) / 180;
         const angle =
-          ((idx * (360 / Math.max(count, 1)) - 45) * Math.PI) / 180 +
-          Math.sin(pose.clock * 0.45 + idx * 1.7) * 0.12;
-        const orbitR = count === 1 ? 0.62 : 0.74;
+          baseAngle + Math.sin(pose.clock * 0.42 + idx * 1.7) * 0.14;
+        const orbitR = count === 1 ? 0.46 : 0.64;
         const bx = Math.cos(angle) * orbitR;
         const by =
-          Math.sin(angle) * orbitR +
-          Math.cos(pose.clock * 0.6 + idx * 1.1) * 0.06;
+          Math.sin(angle) * orbitR * 0.78 +
+          Math.cos(pose.clock * 0.55 + idx * 1.1) * 0.06;
         const bz =
-          Math.sqrt(Math.max(0.15, 1 - bx * bx - by * by)) * 0.85;
+          Math.sqrt(Math.max(0.2, 1 - bx * bx - by * by)) * 0.88;
 
-        // Apply pointer parallax lean + breathing so device nodes move cohesively with the 3D sphere
         const swell = 1 + pose.breathe * Math.sin(pose.clock * 0.8 + idx);
-        const rx = (bx * Math.cos(lean.x * 0.45) + bz * Math.sin(lean.x * 0.45)) * swell;
-        const ry = (by * Math.cos(lean.y * 0.45) - bz * Math.sin(lean.y * 0.45)) * swell;
-        const rz = clamp(bz, 0.2, 1);
+        const rx =
+          (bx * Math.cos(lean.x * 0.55) + bz * Math.sin(lean.x * 0.55)) * swell;
+        const ry =
+          (by * Math.cos(lean.y * 0.55) - bz * Math.sin(lean.y * 0.55)) * swell;
+        const rz = clamp(bz, 0.25, 1);
 
         const k = CAMERA / Math.max(CAMERA - rz, CAMERA_NEAR);
         const px = ox + rx * rPx * k;
         const py = oy - ry * rPx * k;
-        const scale = clamp(0.88 + rz * 0.16, 0.85, 1.08);
+        const scale = clamp(0.92 + rz * 0.14, 0.88, 1.08);
 
         el.style.transform = `translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, 0) translate(-50%, -50%) scale(${scale.toFixed(3)})`;
       }
@@ -1197,6 +1229,7 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
       const rear = 1 - (p.depth / 10) * 0.95;
       const color = parseColor(inkwell, p.color);
       const accent = parseColor(inkwell, p.accent);
+      const cyanGlow = parseColor(inkwell, "#38BDF8");
 
       const devicePx = p.thickness * dpr;
       const core = Math.max(1, devicePx) / 2;
@@ -1240,27 +1273,38 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
       gl.drawArrays(gl.TRIANGLES, 0, lineCount);
       for (const at of bound) gl.disableVertexAttribArray(at);
 
-      // Neural knots on the 3D sphere
+      // Pass 1: Soft outer halo around hub knots on the 3D web
       drawDots(
         kit,
         kit.knotBuffer,
         knotCount,
-        rear,
+        0.25 + rear * 0.5,
+        KNOT_SIZE * 2.2,
+        0,
+        cyanGlow,
+        0.38
+      );
+      // Pass 2: Bright luminous core dots on hub knots
+      drawDots(
+        kit,
+        kit.knotBuffer,
+        knotCount,
+        0.35 + rear * 0.5,
         KNOT_SIZE,
         0,
-        accent,
-        Math.min(1, strength * 1.85)
+        color,
+        0.96
       );
-      // Flowing 3D neural dot matrix across the sphere
+      // Pass 3: Permanent crisp vertex dots across every intersection of the 3D neural web (vanish = 0)
       drawDots(
         kit,
         kit.pointBuffer,
         pointCount,
-        0.4 + rear * 0.5,
+        0.35 + rear * 0.5,
         INTRO_POINT_SIZE,
-        pose.intro < 1 ? 0.65 : 0.42,
+        0,
         color,
-        (pose.intro < 1 ? INTRO_POINT_ALPHA * pointsIn : 0.48)
+        pose.intro < 1 ? INTRO_POINT_ALPHA * pointsIn : 0.78
       );
     }
 
@@ -1514,8 +1558,8 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
         }}
       />
 
-      {/* Interactive 3D-Projected Neural Device Nodes on the Thread Sphere */}
-      {devices.slice(0, 8).map((peer, idx) => (
+      {/* Interactive 3D-Projected Device Dots & Floating Pills on the Neural Web */}
+      {resolvedDevices.slice(0, 8).map((peer, idx) => (
         <div
           key={peer.id}
           ref={(el) => {
@@ -1531,47 +1575,61 @@ function __OriginkitBase_BriarGlobe(props: BriarGlobeProps) {
           }}
         >
           <div className="neural-device-cluster">
-            <button
-              type="button"
-              className={`neural-device-node ${hasStagedFiles ? "ready-to-send" : ""}`}
-              onClick={() => onSelectDevice?.(peer)}
-              title={
-                hasStagedFiles
-                  ? `Send selected files to ${peer.name}`
-                  : `Select files to send to ${peer.name}`
-              }
-            >
-              <span className="neural-knot-pulse" aria-hidden />
-              <span className="neural-device-icon">
-                {platformIcon(peer.platform, 17)}
-                {hasStagedFiles && (
-                  <span className="neural-send-indicator">
-                    <Send size={9} />
-                  </span>
-                )}
-              </span>
-              <span className="neural-device-text">
-                <span className="neural-device-name">{peer.name}</span>
-                <span className="neural-device-meta mono">
-                  {peer.rttMs != null ? `${peer.rttMs}ms` : "Direct Wi-Fi"}
-                  {peer.batteryLevel != null ? ` · ${peer.batteryLevel}%` : ""}
-                </span>
-              </span>
-            </button>
-            {onMessageDevice && (
+            <div className="neural-device-pill-row">
               <button
                 type="button"
-                className="neural-device-msg"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onMessageDevice(peer);
-                }}
-                title={`Send text to ${peer.name}`}
-                aria-label={`Send text to ${peer.name}`}
+                className={`neural-device-node ${stagedActive ? "ready-to-send" : ""}`}
+                onClick={() => handleSelectDevice?.(peer)}
+                title={
+                  stagedActive
+                    ? `Send selected files to ${peer.name}`
+                    : `Select files to send to ${peer.name}`
+                }
               >
-                <MessageSquare size={12} />
+                <span className="neural-device-icon">
+                  {platformIcon(peer.platform, 14)}
+                  {stagedActive && (
+                    <span className="neural-send-indicator">
+                      <Send size={8} />
+                    </span>
+                  )}
+                </span>
+                <span className="neural-device-text">
+                  <span className="neural-device-name">{peer.name}</span>
+                  <span className="neural-device-meta mono">
+                    {peer.discoveryMethod === "Online Room"
+                      ? "Room · Zap Route"
+                      : peer.rttMs != null
+                      ? `${peer.rttMs}ms · Direct`
+                      : "Direct Wi-Fi"}
+                  </span>
+                </span>
               </button>
-            )}
+              {handleMessageDevice && (
+                <button
+                  type="button"
+                  className="neural-device-msg"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleMessageDevice(peer);
+                  }}
+                  title={`Send text to ${peer.name}`}
+                  aria-label={`Send text to ${peer.name}`}
+                >
+                  <MessageSquare size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Glowing pulsing node dot anchored directly on the 3D neural web */}
+            <div
+              className="neural-web-dot-wrapper"
+              onClick={() => handleSelectDevice?.(peer)}
+              title={`Tap to send to ${peer.name}`}
+            >
+              <span className="neural-web-dot-ring" aria-hidden />
+              <span className="neural-web-dot-core" aria-hidden />
+            </div>
           </div>
         </div>
       ))}
@@ -1624,17 +1682,17 @@ const __originkitPresetProps: BriarGlobeProps = {
   },
   lines: {
     color: "#FFFFFF",
-    depth: 10,
-    accent: "#8400FF",
-    opacity: 5.5,
-    thickness: 0.58,
+    depth: 9,
+    accent: "#A855F7",
+    opacity: 6.2,
+    thickness: 0.65,
   },
   hover: {
     lag: 3.9,
-    glow: "#A200FF",
-    pill: "#FFFFFFD9",
-    reach: 18,
-    glowSize: 130,
+    glow: "#38BDF8",
+    pill: "#FFFFFFF0",
+    reach: 22,
+    glowSize: 140,
   },
 };
 
