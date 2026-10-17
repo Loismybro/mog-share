@@ -28,7 +28,7 @@ export const ReceiveModal: React.FC<ReceiveModalProps> = ({
   if (!request) return null;
 
   const formatSize = (bytes: number) => {
-    if (bytes === 0) return '0 B';
+    if (!bytes || bytes <= 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -39,17 +39,33 @@ export const ReceiveModal: React.FC<ReceiveModalProps> = ({
     if (type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-sky-400" />;
     if (type.startsWith('video/')) return <Film className="w-4 h-4 text-indigo-400" />;
     if (type.startsWith('audio/')) return <Music className="w-4 h-4 text-emerald-400" />;
-    if (name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z') || name.endsWith('.tar.gz')) {
+    if (
+      name.endsWith('.zip') ||
+      name.endsWith('.rar') ||
+      name.endsWith('.7z') ||
+      name.endsWith('.tar.gz')
+    ) {
       return <Archive className="w-4 h-4 text-amber-400" />;
     }
     return <FileText className="w-4 h-4 text-slate-300" />;
   };
 
+  const senderName = request.fromName || request.from?.name || 'Nearby Peer';
+  const senderPlatform = String(request.fromPlatform || request.from?.platform || 'web');
+  const filesList =
+    request.files && request.files.length > 0
+      ? request.files
+      : request.meta
+      ? [request.meta]
+      : [];
+  const totalBytes =
+    request.totalSize ?? filesList.reduce((acc, f) => acc + (f.size || 0), 0);
+
   const isMobile =
-    request.from.platform === 'Android' || request.from.platform === 'iOS';
+    senderPlatform.toLowerCase() === 'android' || senderPlatform.toLowerCase() === 'ios';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
       <div className="relative w-full max-w-md rounded-2xl mog-glass border border-white/15 p-6 shadow-2xl overflow-hidden">
         {/* Ambient top glow */}
         <div
@@ -70,26 +86,24 @@ export const ReceiveModal: React.FC<ReceiveModalProps> = ({
               <Sparkles className="w-3 h-3" />
               <span>Incoming P2P Beam</span>
             </div>
-            <h3 className="text-lg font-bold text-white truncate">
-              {request.from.name}
-            </h3>
+            <h3 className="text-lg font-bold text-white truncate">{senderName}</h3>
             <p className="text-xs text-slate-400">
-              {request.from.platform} • {request.files.length}{' '}
-              {request.files.length === 1 ? 'file' : 'files'} ({formatSize(request.totalSize)})
+              {request.fromModel || senderPlatform} • {filesList.length}{' '}
+              {filesList.length === 1 ? 'file' : 'files'} ({formatSize(totalBytes)})
             </p>
           </div>
         </div>
 
         {/* File list */}
         <div className="max-h-52 overflow-y-auto space-y-2 mb-5 pr-1">
-          {request.files.map((file, idx) => (
+          {filesList.map((file, idx) => (
             <div
               key={`${file.name}-${idx}`}
-              className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.04] border border-white/8"
+              className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.04] border border-white/10"
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
-                  {getFileIcon(file.type, file.name)}
+                  {getFileIcon(file.type || '', file.name)}
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-slate-100 truncate">
@@ -105,9 +119,16 @@ export const ReceiveModal: React.FC<ReceiveModalProps> = ({
         </div>
 
         {/* Security footer badge */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 mb-5">
-          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>SHA-256 block-verified transfer • Direct encrypted stream</span>
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 mb-5">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>SHA-256 block-verified encrypted stream</span>
+          </div>
+          {request.sasEmoji && (
+            <span className="font-mono text-xs" title={`SAS: ${request.sasNumeric || ''}`}>
+              {request.sasEmoji}
+            </span>
+          )}
         </div>
 
         {/* Actions */}

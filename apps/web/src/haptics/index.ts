@@ -113,13 +113,20 @@ class HapticEngine {
       pattern = pattern.map((ms) => Math.max(1, Math.round(ms / 2)));
     }
 
-    // Engine a: navigator.vibrate
+    // Engine a: navigator.vibrate (only after user interaction)
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-      try {
-        navigator.vibrate(0); // Cancel any running pattern
-        navigator.vibrate(pattern);
-        return;
-      } catch { /* ignored */ }
+      const hasActivation = (navigator as any).userActivation
+        ? Boolean((navigator as any).userActivation.hasBeenActive)
+        : false;
+      if (hasActivation) {
+        try {
+          navigator.vibrate(0);
+          navigator.vibrate(pattern);
+          return;
+        } catch {
+          /* ignored */
+        }
+      }
     }
 
     // Engine b: iOS Safari hidden switch (works during user gesture)

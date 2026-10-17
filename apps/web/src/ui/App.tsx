@@ -18,8 +18,6 @@ import {
   VolumeX,
   Sparkles,
   ShieldCheck,
-  Laptop,
-  Smartphone,
   FileText,
   Image as ImageIcon,
   Film,
@@ -28,12 +26,10 @@ import {
   Trash2,
   Eye,
   ArrowRight,
-  RefreshCw,
   Code2,
   Radio,
   Zap,
   Layers,
-  Edit3,
   LogOut,
 } from 'lucide-react';
 import type {
@@ -80,7 +76,7 @@ export function App() {
   });
 
   const [activeTab, setActiveTab] = useState<'share' | 'Online' | 'history' | 'vault'>('share');
-  const [connState, setConnState] = useState<ConnState>(network.getState());
+  const [, setConnState] = useState<ConnState>(network.getState());
   const [peers, setPeers] = useState<Device[]>(network.getPeers());
   const [transfers, setTransfers] = useState<TransferFile[]>(network.getTransfers());
   const [incomingReq, setIncomingReq] = useState<IncomingRequest | null>(
@@ -176,6 +172,19 @@ export function App() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatTransferSpeed = (t: TransferFile) => {
+    if (typeof t.speedBytesPerSec === 'number' && t.speedBytesPerSec > 0) {
+      return `${formatSize(t.speedBytesPerSec)}/s`;
+    }
+    if (typeof t.speed === 'number' && t.speed > 0) {
+      return `${formatSize(t.speed)}/s`;
+    }
+    if (typeof t.speed === 'string' && t.speed) {
+      return t.speed;
+    }
+    return '';
+  };
+
   const stagedTotalBytes = useMemo(
     () => stagedFiles.reduce((acc, f) => acc + f.size, 0),
     [stagedFiles],
@@ -204,7 +213,6 @@ export function App() {
 
   const handleSelectPeer = async (peer: Device) => {
     if (stagedFiles.length === 0) {
-      // Prompt user to pick files and immediately send to this peer once chosen
       const input = document.createElement('input');
       input.type = 'file';
       input.multiple = true;
@@ -230,8 +238,7 @@ export function App() {
   };
 
   const handleCreateRoom = () => {
-    const code = network.createRoom();
-    setRoomCode(code);
+    network.createRoom();
   };
 
   const handleJoinRoom = (codeToJoin?: string) => {
@@ -275,7 +282,8 @@ export function App() {
   };
 
   const handleDownloadReceivedFile = (t: TransferFile) => {
-    const blobUrl = t.blobUrl || (t.blob ? URL.createObjectURL(t.blob) : undefined);
+    const rawBlob = t.fileBlob || t.blob;
+    const blobUrl = t.blobUrl || (rawBlob ? URL.createObjectURL(rawBlob) : undefined);
     if (!blobUrl) return;
     const a = document.createElement('a');
     a.href = blobUrl;
@@ -306,12 +314,8 @@ export function App() {
     soundEffects.setEnabled(next);
   };
 
-  const activeTransfers = transfers.filter(
-    (t) => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused',
-  );
-
   const shareBaseUrl =
-    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    typeof window !== 'undefined' ? window.location.origin + window.location.pathname : 'http://localhost:3000';
 
   const getFileIcon = (type: string, name: string) => {
     if (type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-sky-400" />;
@@ -330,26 +334,15 @@ export function App() {
     return (
       <div className="relative min-h-screen w-full bg-[#07090F] text-[#F3F6FA] overflow-hidden flex flex-col justify-between select-none">
         {/* Full-screen Interactive CipherReach Two Reaching Hands ASCII/Glyph Canvas */}
-        <div className="absolute inset-0 z-0 opacity-90">
+        <div className="absolute inset-0 z-0 opacity-95">
           <CipherReach
-            fill={{ seed: 42, density: 0.78, edgeDensity: 0.92, fingerDensity: 0.88 }}
-            look={{
-              bg: '#07090F',
-              fg: '#E2E8F0',
-              accent: '#38BDF8',
-              accentMix: 0.68,
-              cell: 12,
-              fontScale: 1.05,
-              contrast: 1.35,
-              invert: false,
-            }}
-            motion={{
-              animate: true,
-              speed: 0.72,
-              shimmer: 0.42,
-              reach: 0.55,
-              Interactive: true,
-            }}
+            background="#07090F"
+            glyphColor="#E2E8F0"
+            accent="#38BDF8"
+            accentAmount={35}
+            fill={{ seed: 7, density: 100, edgeDensity: 100, fingerDensity: 100 }}
+            look={{ glyphSize: 125, squareSize: 72, glow: 25, vignette: 15 }}
+            speed={10}
           />
         </div>
 
@@ -358,7 +351,7 @@ export function App() {
           className="absolute inset-0 z-10 pointer-events-none"
           style={{
             background:
-              'radial-gradient(circle at 50% 50%, rgba(7,9,15,0.25) 0%, rgba(7,9,15,0.78) 65%, rgba(7,9,15,0.95) 100%)',
+              'radial-gradient(circle at 50% 50%, rgba(7,9,15,0.25) 0%, rgba(7,9,15,0.75) 65%, rgba(7,9,15,0.92) 100%)',
           }}
         />
 
@@ -402,17 +395,16 @@ export function App() {
           {/* MorphingGlyphCloud Kinetic Particle Typography */}
           <div className="w-full max-w-2xl h-24 sm:h-28 mb-2 pointer-events-auto">
             <MorphingGlyphCloud
-              text={GLYPH_PHRASES[phraseIdx]}
-              palette="electric"
               background="transparent"
-              accentColor="#38BDF8"
-              density={6}
-              glyphSize={0.95}
-              morphSpeed={1.25}
-              turbulence={0.28}
-              repelRadius={100}
-              repelForce={0.75}
-              glow={0.75}
+              baseColor="#38BDF8"
+              mark={{
+                source: 'text',
+                textA: GLYPH_PHRASES[phraseIdx],
+                textB: GLYPH_PHRASES[(phraseIdx + 1) % GLYPH_PHRASES.length],
+              }}
+              glyphSize={95}
+              speed={55}
+              autoMorphMs={3800}
             />
           </div>
 
@@ -513,26 +505,14 @@ export function App() {
       }}
     >
       {/* Subtle Ambient CipherReach Background Layer */}
-      <div className="fixed inset-0 z-0 opacity-[0.14] pointer-events-none">
+      <div className="fixed inset-0 z-0 opacity-[0.18] pointer-events-none">
         <CipherReach
-          fill={{ seed: 42, density: 0.65, edgeDensity: 0.85, fingerDensity: 0.8 }}
-          look={{
-            bg: '#07090F',
-            fg: '#334155',
-            accent: '#38BDF8',
-            accentMix: 0.55,
-            cell: 16,
-            fontScale: 1,
-            contrast: 1.2,
-            invert: false,
-          }}
-          motion={{
-            animate: true,
-            speed: 0.35,
-            shimmer: 0.25,
-            reach: 0.45,
-            Interactive: false,
-          }}
+          background="#07090F"
+          glyphColor="#475569"
+          accent="#38BDF8"
+          accentAmount={25}
+          fill={{ seed: 7, density: 85, edgeDensity: 90, fingerDensity: 90 }}
+          speed={6}
         />
       </div>
 
@@ -680,7 +660,6 @@ export function App() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* LEFT COLUMN (7 cols): 3D BriarGlobe Radar + Online Room Controls */}
             <div className="lg:col-span-7 space-y-5">
-              {/* Online Room Control Card when on Online tab or when a room is active */}
               {(activeTab === 'Online' || roomCode) && (
                 <div className="mog-glass rounded-2xl p-5 border border-sky-400/25">
                   <div className="flex flex-wrap items-center justify-between gap-4">
@@ -919,74 +898,80 @@ export function App() {
                   </div>
                 ) : (
                   <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                    {transfers.slice(0, 6).map((t) => (
-                      <div
-                        key={t.id}
-                        className="p-3 rounded-xl bg-white/[0.04] border border-white/10 space-y-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
-                              {getFileIcon(t.type, t.name)}
+                    {transfers.slice(0, 6).map((t) => {
+                      const isSent = t.direction === 'sending' || t.direction === 'send';
+                      const speedStr = formatTransferSpeed(t);
+                      const hasBlob = Boolean(t.blobUrl || t.fileBlob || t.blob);
+                      return (
+                        <div
+                          key={t.id}
+                          className="p-3 rounded-xl bg-white/[0.04] border border-white/10 space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
+                                {getFileIcon(t.type, t.name)}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-white truncate">{t.name}</p>
+                                <p className="text-[10px] font-mono text-slate-400">
+                                  {isSent ? '↑ Sent' : '↓ Received'} • {formatSize(t.size)}
+                                  {speedStr ? ` • ${speedStr}` : ''}
+                                </p>
+                              </div>
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-bold text-white truncate">{t.name}</p>
-                              <p className="text-[10px] font-mono text-slate-400">
-                                {t.direction === 'send' ? '↑ Sent' : '↓ Received'} •{' '}
-                                {formatSize(t.size)}
-                                {t.speed ? ` • ${t.speed}` : ''}
-                              </p>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {t.status === 'completed' && hasBlob && (
+                                <>
+                                  <button
+                                    onClick={() => setPreviewFile(t)}
+                                    className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-sky-300 cursor-pointer"
+                                    title="Preview File"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDownloadReceivedFile(t)}
+                                    className="px-2.5 py-1 rounded-lg mog-btn-primary text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    <span>Save</span>
+                                  </button>
+                                </>
+                              )}
+                              {t.status === 'completed' && (
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-semibold">
+                                  VERIFIED
+                                </span>
+                              )}
+                              {t.status === 'failed' && (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-mono font-semibold">
+                                  FAILED
+                                </span>
+                              )}
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {t.status === 'completed' && (t.blobUrl || t.blob) && (
-                              <>
-                                <button
-                                  onClick={() => setPreviewFile(t)}
-                                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-sky-300 cursor-pointer"
-                                  title="Preview File"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleDownloadReceivedFile(t)}
-                                  className="px-2.5 py-1 rounded-lg mog-btn-primary text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  <span>Save</span>
-                                </button>
-                              </>
-                            )}
-                            {t.status === 'completed' && (
-                              <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-semibold">
-                                VERIFIED
-                              </span>
-                            )}
-                            {t.status === 'failed' && (
-                              <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-mono font-semibold">
-                                FAILED
-                              </span>
-                            )}
-                          </div>
+                          {(t.status === 'transferring' ||
+                            t.status === 'pending' ||
+                            t.status === 'waiting') && (
+                            <div>
+                              <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                <div
+                                  className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all duration-150"
+                                  style={{ width: `${Math.max(4, t.progress)}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                                <span>{t.progress}%</span>
+                                <span>{speedStr || 'Streaming…'}</span>
+                              </div>
+                            </div>
+                          )}
                         </div>
-
-                        {(t.status === 'transferring' || t.status === 'pending') && (
-                          <div>
-                            <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all duration-150"
-                                style={{ width: `${Math.max(4, t.progress)}%` }}
-                              />
-                            </div>
-                            <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
-                              <span>{t.progress}%</span>
-                              <span>{t.speed || 'Streaming…'}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1021,46 +1006,50 @@ export function App() {
               </div>
             ) : (
               <div className="space-y-3">
-                {transfers.map((t) => (
-                  <div
-                    key={t.id}
-                    className="mog-glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-4"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
-                        {getFileIcon(t.type, t.name)}
+                {transfers.map((t) => {
+                  const isSent = t.direction === 'sending' || t.direction === 'send';
+                  const hasBlob = Boolean(t.blobUrl || t.fileBlob || t.blob);
+                  return (
+                    <div
+                      key={t.id}
+                      className="mog-glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-4"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+                          {getFileIcon(t.type, t.name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-white truncate">{t.name}</p>
+                          <p className="text-xs font-mono text-slate-400">
+                            {isSent ? 'Sent' : 'Received'} • {formatSize(t.size)} •{' '}
+                            {t.status.toUpperCase()}
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-white truncate">{t.name}</p>
-                        <p className="text-xs font-mono text-slate-400">
-                          {t.direction === 'send' ? 'Sent' : 'Received'} • {formatSize(t.size)} •{' '}
-                          {t.status.toUpperCase()}
-                        </p>
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-2">
-                      {(t.blobUrl || t.blob) && (
-                        <>
-                          <button
-                            onClick={() => setPreviewFile(t)}
-                            className="px-3 py-1.5 rounded-lg mog-btn-secondary text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Preview</span>
-                          </button>
-                          <button
-                            onClick={() => handleDownloadReceivedFile(t)}
-                            className="px-3.5 py-1.5 rounded-lg mog-btn-primary text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>Download</span>
-                          </button>
-                        </>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {hasBlob && (
+                          <>
+                            <button
+                              onClick={() => setPreviewFile(t)}
+                              className="px-3 py-1.5 rounded-lg mog-btn-secondary text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Preview</span>
+                            </button>
+                            <button
+                              onClick={() => handleDownloadReceivedFile(t)}
+                              className="px-3.5 py-1.5 rounded-lg mog-btn-primary text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Download</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1128,7 +1117,19 @@ export function App() {
 
       {/* File Preview Modal */}
       {previewFile && (
-        <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+        <FilePreviewModal
+          file={{
+            id: previewFile.id,
+            name: previewFile.name,
+            size: previewFile.size,
+            type: previewFile.type,
+            blobUrl: previewFile.blobUrl,
+            blob: previewFile.fileBlob || previewFile.blob,
+          }}
+          peers={peers}
+          onClose={() => setPreviewFile(null)}
+          pushToast={() => undefined}
+        />
       )}
 
       {/* Peer Chat Drawer */}

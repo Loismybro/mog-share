@@ -5,6 +5,7 @@ import type {
   IncomingRequest,
   Platform,
   TransferFile,
+  ChatMessage,
 } from '../types';
 import {
   DEFAULT_CHUNK_SIZE,
@@ -35,7 +36,8 @@ import { TransferJournal } from '../transfer/resume/journal.js';
 import { BlockBitmap } from '../transfer/resume/bitmap.js';
 import { haptics } from '../haptics/index.js';
 import { soundEffects } from '../utils/soundEffects.js';
-import type { DetectedDeviceProfile } from '../utils/deviceDetector.js';
+import { detectDeviceProfileSync, type DetectedDeviceProfile } from '../utils/deviceDetector.js';
+import { saveToPersonalSpace } from '../utils/personalSpace.js';
 
 export function safeGet(key: string): string | null {
   try {
@@ -207,19 +209,94 @@ export class NetworkService {
   private relayFrameCounter = 0;
   private pendingRoomAction: (() => void) | null = null;
 
+  private subscribers = new Set<() => void>();
+  private pendingIncomingReq: IncomingRequest | null = null;
+  private chatHistory: ChatMessage[] = [];
+
   constructor(
-    deviceName: string,
-    platform: Platform,
-    callbacks: NetworkCallbacks,
+    deviceName?: string,
+    platform?: Platform,
+    callbacks?: Partial<NetworkCallbacks>,
     serverUrlOverride: string | null = null,
     deviceProfile?: Partial<DetectedDeviceProfile>
   ) {
+    const detected = detectDeviceProfileSync();
+    const savedName = safeGet('mog_device_name');
     this.deviceId = getPersistentDeviceId();
-    this.deviceName = deviceName;
-    this.platform = platform;
-    this.deviceProfile = deviceProfile;
-    this.callbacks = callbacks;
+    this.deviceName = deviceName || savedName || detected.suggestedName || 'MogShare Node';
+    this.platform = platform || detected.platform || 'web';
+    this.deviceProfile = deviceProfile || detected;
     this.journal = new TransferJournal();
+
+    this.callbacks = {
+      onStateChange: (s, d) => {
+        callbacks?.onStateChange?.(s, d);
+        this.notifySubscribers();
+      },
+      onPeersChanged: (p) => {
+        callbacks?.onPeersChanged?.(p);
+        this.notifySubscribers();
+      },
+      onRoomCreated: (c) => {
+        callbacks?.onRoomCreated?.(c);
+        this.notifySubscribers();
+      },
+      onRoomJoined: (c) => {
+        callbacks?.onRoomJoined?.(c);
+        this.notifySubscribers();
+      },
+      onRoomLeft: () => {
+        callbacks?.onRoomLeft?.();
+        this.notifySubscribers();
+      },
+      onRoomPeers: (p) => {
+        callbacks?.onRoomPeers?.(p);
+        this.notifySubscribers();
+      },
+      onRoomError: (m) => {
+        callbacks?.onRoomError?.(m);
+        this.notifySubscribers();
+      },
+      onIncomingRequest: (req) => {
+        this.pendingIncomingReq = req;
+        callbacks?.onIncomingRequest?.(req);
+        this.notifySubscribers();
+      },
+      onTransferUpdate: (t) => {
+        if (t.status === 'completed' && t.direction === 'receiving' && t.fileBlob) {
+          void saveToPersonalSpace({
+            id: t.id,
+            transferId: t.id,
+            name: t.name,
+            size: t.size,
+            type: t.type,
+            senderName: t.peerName || 'Peer',
+            senderId: t.peerId,
+            receivedAt: Date.now(),
+            blob: t.fileBlob,
+            blobUrl: t.blobUrl,
+          }).catch(() => undefined);
+        }
+        callbacks?.onTransferUpdate?.(t);
+        this.notifySubscribers();
+      },
+      onClipboardReceived: (fromDevice, content, timestamp, meta) => {
+        this.chatHistory.push({
+          id: `msg_${timestamp}_${Math.random().toString(36).slice(2, 7)}`,
+          senderId: meta?.fromId || 'peer',
+          senderName: fromDevice,
+          text: content,
+          timestamp,
+          isSelf: false,
+        });
+        callbacks?.onClipboardReceived?.(fromDevice, content, timestamp, meta);
+        this.notifySubscribers();
+      },
+      onError: (m) => {
+        callbacks?.onError?.(m);
+        this.notifySubscribers();
+      },
+    };
 
     const envUrl = (import.meta as any).env?.VITE_SERVER_URL as string | undefined;
     const storedUrl =
@@ -234,6 +311,129 @@ export class NetworkService {
 
     this.initLocalBroadcastBus();
     void this.initialize();
+  }
+
+  private notifySubscribers() {
+    for (const sub of this.subscribers) {
+      try {
+        sub();
+      } catch {}
+    }
+  }
+
+  public subscribe(listener: () => void): () => void {
+    this.subscribers.add(listener);
+    return () => {
+      this.subscribers.delete(listener);
+    };
+  }
+
+  public getPeers(): Device[] {
+    const combined: Device[] = [];
+    for (const [id, p] of this.visiblePeers) {
+      if (id !== this.deviceId) combined.push(p);
+    }
+    for (const [id, entry] of this.localBusPeers) {
+      if (id !== this.deviceId && !this.visiblePeers.has(id)) {
+        combined.push(entry.device);
+      }
+    }
+    for (const [id, p] of this.roomPeers) {
+      if (id !== this.deviceId) {
+        combined.push({ ...p, discoveryMethod: 'Online Room' });
+      }
+    }
+    return this.deduplicateDeviceList(combined);
+  }
+
+  public getTransfers(): TransferFile[] {
+    return Array.from(this.transferFiles.values()).sort(
+      (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+    );
+  }
+
+  public getIncomingRequest(): IncomingRequest | null {
+    return this.pendingIncomingReq;
+  }
+
+  public getChatMessages(): ChatMessage[] {
+    return this.chatHistory;
+  }
+
+  public getRoomCode(): string | null {
+    return this.currentRoomCode;
+  }
+
+  public getLocalInfo(): { id: string; name: string; platform: Platform; model?: string } {
+    return {
+      id: this.deviceId,
+      name: this.deviceName,
+      platform: this.platform,
+      model: this.deviceProfile?.model,
+    };
+  }
+
+  public async sendFiles(peerId: string, files: File[]): Promise<void> {
+    const peer =
+      this.getPeers().find((p) => p.id === peerId) ||
+      ({ id: peerId, name: 'Connected Peer', platform: 'web', status: 'online' } as Device);
+    for (const file of files) {
+      await this.sendFile(peer, file);
+    }
+  }
+
+  public rescanPeers(): void {
+    this.rescan();
+  }
+
+  public async acceptRequest(): Promise<void> {
+    const req = this.pendingIncomingReq;
+    if (!req) return;
+    this.pendingIncomingReq = null;
+    this.notifySubscribers();
+    await this.respondToRequest(req, true);
+  }
+
+  public async declineRequest(): Promise<void> {
+    const req = this.pendingIncomingReq;
+    if (!req) return;
+    this.pendingIncomingReq = null;
+    this.notifySubscribers();
+    await this.respondToRequest(req, false);
+  }
+
+  public sendChatMessage(peerId: string, text: string): void {
+    const timestamp = Date.now();
+    this.chatHistory.push({
+      id: `msg_${timestamp}_${Math.random().toString(36).slice(2, 7)}`,
+      senderId: peerId,
+      senderName: this.deviceName,
+      text,
+      timestamp,
+      isSelf: true,
+    });
+    this.sendDirectMessage(peerId, text);
+    this.notifySubscribers();
+  }
+
+  public setDeviceName(name: string): void {
+    safeSet('mog_device_name', name);
+    this.updateProfile(name, this.platform, this.deviceProfile);
+    this.notifySubscribers();
+  }
+
+  public clearFinishedTransfers(): void {
+    for (const [id, t] of this.transferFiles.entries()) {
+      if (
+        t.status === 'completed' ||
+        t.status === 'failed' ||
+        t.status === 'cancelled' ||
+        t.status === 'declined'
+      ) {
+        this.transferFiles.delete(id);
+      }
+    }
+    this.notifySubscribers();
   }
 
   public getDeviceId(): string {

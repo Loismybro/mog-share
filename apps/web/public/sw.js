@@ -1,5 +1,5 @@
 /* Mog Share service worker — F5: offline shell, asset caching, share_target. */
-const SHELL_CACHE = 'mog-shell-v1';
+const SHELL_CACHE = 'mog-shell-v3';
 const SHARED_CACHE = 'mog-shared-files';
 
 self.addEventListener('install', (event) => {
