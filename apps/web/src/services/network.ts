@@ -1401,25 +1401,12 @@ export class NetworkService {
     }
 
     const queue = this.acceptedSendQueue.get(remoteDeviceId) || [];
-    while (queue.length > 0) {
-      // Allow up to 2 small files (< 8 MB) concurrently, or 1 large file dedicated at 100% bandwidth
-      const hasLargeRunning = Array.from(running).some((id) => {
-        const tf = this.transferFiles.get(id);
-        return tf && tf.size >= 8 * 1024 * 1024;
-      });
-      if (hasLargeRunning || running.size >= 2) {
-        break;
-      }
-      const nextId = queue[0];
-      const nextTf = this.transferFiles.get(nextId);
-      if (running.size > 0 && nextTf && nextTf.size >= 8 * 1024 * 1024) {
-        break;
-      }
-
-      queue.shift();
+    while (queue.length > 0 && running.size < 1) {
+      const nextId = queue.shift()!;
       const sender = this.activeSenders.get(nextId);
       if (!sender) continue;
 
+      const nextTf = this.transferFiles.get(nextId);
       running.add(nextId);
       if (nextTf) {
         nextTf.status = 'transferring';

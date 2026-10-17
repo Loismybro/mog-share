@@ -88,13 +88,12 @@ export class PeerSession {
     this.ctlChannel.binaryType = 'arraybuffer';
 
     // Create 4 parallel negotiated high-speed data channels (ids 1..4)
-    // unordered: true eliminates SCTP head-of-line blocking on WAN/mobile links
-    // because MogShare frames carry explicit (blockIndex, chunkIndex) headers!
+    // Each channel uses its own independent SCTP stream (1..4) with reliable delivery
     for (let i = 0; i < PARALLEL_DATA_CHANNEL_COUNT; i++) {
       const ch = this.pc.createDataChannel(i === 0 ? 'data' : `data-${i + 1}`, {
         id: i + 1,
         negotiated: true,
-        ordered: false,
+        ordered: true,
       });
       ch.binaryType = 'arraybuffer';
       ch.bufferedAmountLowThreshold = BUFFERED_AMOUNT_LOW_THRESHOLD;

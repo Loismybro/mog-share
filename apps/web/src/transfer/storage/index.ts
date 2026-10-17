@@ -121,6 +121,7 @@ export interface BlockWriter {
 export class MemoryBlockWriter implements BlockWriter {
   private blocks = new Map<number, Uint8Array>();
   private mimeType: string;
+  private finalizedBlob: Blob | null = null;
 
   constructor(mimeType = 'application/octet-stream') {
     this.mimeType = mimeType;
@@ -130,21 +131,27 @@ export class MemoryBlockWriter implements BlockWriter {
     const copy = new Uint8Array(data.byteLength);
     copy.set(data);
     this.blocks.set(blockIndex, copy);
+    this.finalizedBlob = null;
   }
 
   async finalize(): Promise<Blob> {
+    if (this.blocks.size === 0 && this.finalizedBlob) {
+      return this.finalizedBlob;
+    }
     const sortedIndices = Array.from(this.blocks.keys()).sort((a, b) => a - b);
     const parts: Uint8Array[] = [];
     for (const idx of sortedIndices) {
       parts.push(this.blocks.get(idx)!);
     }
     const blob = new Blob(parts as unknown as BlobPart[], { type: this.mimeType });
+    this.finalizedBlob = blob;
     this.blocks.clear();
     return blob;
   }
 
   async abort(): Promise<void> {
     this.blocks.clear();
+    this.finalizedBlob = null;
   }
 }
 

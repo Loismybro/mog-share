@@ -22,6 +22,18 @@ export interface SignalingClientCallbacks {
 
 const textEncoder = new TextEncoder();
 
+function fastUint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.byteLength; i += chunk) {
+    binary += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, Math.min(i + chunk, bytes.byteLength)))
+    );
+  }
+  return btoa(binary);
+}
+
 export class SignalingLadderClient {
   private deviceId: string;
   private serverUrl: string;
@@ -36,6 +48,7 @@ export class SignalingLadderClient {
   private turboInitializing = false;
   private turboRoundRobin = 0;
   private httpInFlight = 0;
+  private binaryRelaySupported = false;
   private sse: EventSource | null = null;
   private pollAbort: AbortController | null = null;
 
@@ -122,9 +135,10 @@ export class SignalingLadderClient {
 
   /**
    * Spins up parallel binary WebSocket turbo lanes (/ws?turbo=1) for multi-route online transfers
+   * when connected to a binaryRelay-capable signaling server.
    */
   public ensureTurboLanes(desiredCount = 2): void {
-    if (this.destroyed || typeof WebSocket === 'undefined') return;
+    if (this.destroyed || typeof WebSocket === 'undefined' || !this.binaryRelaySupported) return;
     this.turboSockets = this.turboSockets.filter(
       (s) => s.readyState === WebSocket.OPEN || s.readyState === WebSocket.CONNECTING
     );
@@ -169,8 +183,13 @@ export class SignalingLadderClient {
   /**
    * Packs [0x4D, 0x47, targetIdLen, ...targetIdBytes, ...rawFrame]
    * and routes across parallel Binary WebSocket lanes + HTTP Binary Burst backup route!
+   * Automatically falls back to JSON relay-frame if the remote server does not advertise binaryRelay.
    */
   public sendBinaryRelay(toDeviceId: string, frame: Uint8Array): boolean {
+    if (!this.binaryRelaySupported) {
+      return this.send('relay-frame', { data: fastUint8ToBase64(frame), raw: true }, toDeviceId);
+    }
+
     this.ensureTurboLanes(2);
 
     const openLanes: WebSocket[] = [];
@@ -394,19 +413,29 @@ export class SignalingLadderClient {
     }
   }
 
+  private unwrapBinaryPayload(bytes: Uint8Array): Uint8Array {
+    if (bytes.byteLength > 4 && bytes[0] === 0x4d && bytes[1] === 0x47) {
+      const idLen = bytes[2];
+      if (idLen > 0 && 3 + idLen < bytes.byteLength) {
+        return bytes.subarray(3 + idLen);
+      }
+    }
+    return bytes;
+  }
+
   private handleIncomingRaw(data: any) {
     // Fast-path: Zero-copy binary frame delivered from WebSocket turbo or primary lane
     if (data instanceof ArrayBuffer) {
-      this.callbacks.onBinaryFrame?.(new Uint8Array(data));
+      this.callbacks.onBinaryFrame?.(this.unwrapBinaryPayload(new Uint8Array(data)));
       return;
     }
     if (data instanceof Uint8Array) {
-      this.callbacks.onBinaryFrame?.(data);
+      this.callbacks.onBinaryFrame?.(this.unwrapBinaryPayload(data));
       return;
     }
     if (typeof Blob !== 'undefined' && data instanceof Blob) {
       void data.arrayBuffer().then((ab) => {
-        this.callbacks.onBinaryFrame?.(new Uint8Array(ab));
+        this.callbacks.onBinaryFrame?.(this.unwrapBinaryPayload(new Uint8Array(ab)));
       });
       return;
     }
@@ -418,6 +447,14 @@ export class SignalingLadderClient {
 
       if (envelope.type === 'pong') {
         this.heartbeatMisses = 0;
+      }
+
+      if (
+        envelope.payload &&
+        typeof envelope.payload === 'object' &&
+        (envelope.payload as Record<string, unknown>).binaryRelay === true
+      ) {
+        this.binaryRelaySupported = true;
       }
 
       this.callbacks.onMessage(envelope);

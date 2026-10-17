@@ -667,6 +667,7 @@ function handleIncomingSocketMessage(
             tooManyDevices,
             observedNetworkKey: connNetworkKey,
             clientIp,
+            binaryRelay: true,
           })
         )
       );
@@ -788,6 +789,7 @@ function handleIncomingSocketMessage(
             createEnvelope('resumed', {
               deviceId: existing.deviceId,
               name: existing.name,
+              binaryRelay: true,
             })
           )
         );
@@ -803,7 +805,11 @@ function handleIncomingSocketMessage(
       ensureDeviceSession(from, clientIp, payload);
       const room = roomManager.createRoom(from, payload.password as string | undefined);
       metrics.totalRoomsCreated++;
-      ws.send(JSON.stringify(createEnvelope('room-created', { roomCode: room.code })));
+      ws.send(
+        JSON.stringify(
+          createEnvelope('room-created', { roomCode: room.code, binaryRelay: true })
+        )
+      );
       break;
     }
 
@@ -874,7 +880,13 @@ function handleIncomingSocketMessage(
         });
 
       ws.send(
-        JSON.stringify(createEnvelope('room-joined', { roomCode: code, peers: existingPeers }))
+        JSON.stringify(
+          createEnvelope('room-joined', {
+            roomCode: code,
+            peers: existingPeers,
+            binaryRelay: true,
+          })
+        )
       );
 
       for (const peerId of joinResult.room!.peerIds) {

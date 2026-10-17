@@ -117,7 +117,7 @@ class HapticEngine {
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       const hasActivation = (navigator as any).userActivation
         ? Boolean((navigator as any).userActivation.hasBeenActive)
-        : false;
+        : true;
       if (hasActivation) {
         try {
           navigator.vibrate(0);

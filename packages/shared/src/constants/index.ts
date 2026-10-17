@@ -8,23 +8,23 @@ export const APP_VERSION = '1.0.0';
 // ---------------------------------------------------------------------------
 // High-Throughput Multi-Route Transfer Engine Constants
 // ---------------------------------------------------------------------------
-export const DEFAULT_CHUNK_SIZE = 60 * 1024; // 60 KiB payload (fits safely inside 64 KiB SCTP limit with 17B header)
+export const DEFAULT_CHUNK_SIZE = 16 * 1024; // 16 KiB payload (universally safe across all WebRTC SCTP stacks)
 export const MAX_CHUNK_SIZE = 64 * 1024; // 64 KiB ceiling
-export const DEFAULT_BLOCK_SIZE = 512 * 1024; // 512 KiB blocks (~9 chunks) for ultra-fast streaming ACK turnaround & zero stall on WAN/LAN
+export const DEFAULT_BLOCK_SIZE = 256 * 1024; // 256 KiB blocks (16 chunks) for fast streaming ACK turnaround
 
 // Flow control watermarks (Layer 1 - Transport)
 export const BUFFERED_AMOUNT_LOW_THRESHOLD = 512 * 1024; // 512 KiB low watermark
 export const BUFFERED_AMOUNT_HIGH_WATERMARK = 8 * 1024 * 1024; // 8 MiB high watermark for full multi-channel saturation
 
 // Credit-based flow control (Layer 2 - Application)
-export const DEFAULT_CREDIT_WINDOW_BLOCKS = 16; // 16 blocks = 8 MiB in-flight sliding window
+export const DEFAULT_CREDIT_WINDOW_BLOCKS = 16; // 16 blocks = 4 MiB in-flight sliding window
 export const MIN_CREDIT_WINDOW_BLOCKS = 8;
 export const MAX_CREDIT_WINDOW_BLOCKS = 48;
 export const MAX_BLOCK_RETRIES = 6;
 
 // Storage strategy limits
-export const MEMORY_WRITER_MAX_BYTES = 200 * 1024 * 1024; // 200 MB unit-test baseline (browser runtime dynamically scales up to 2 GB)
-export const MEMORY_WRITER_WARN_BYTES = 150 * 1024 * 1024;
+export const MEMORY_WRITER_MAX_BYTES = 200 * 1024 * 1024; // 200 MB baseline (browser runtime scales up to 2 GB when OPFS is unavailable)
+export const MEMORY_WRITER_WARN_BYTES = 100 * 1024 * 1024; // 100 MB warning baseline
 export const STORAGE_QUOTA_SAFETY_MARGIN_PERCENT = 2;
 export const OPFS_TEMP_FILE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour so active session files never expire prematurely
 export const TRANSFER_JOURNAL_DEBOUNCE_MS = 1000;

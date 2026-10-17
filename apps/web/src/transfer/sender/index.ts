@@ -339,22 +339,24 @@ export class FileSenderPipeline {
       payload: blockEndPayload,
     });
 
-    // 2. Also send in-band BinaryFrameType.CONTROL block-end frame over data route
-    // so multi-route streaming can verify immediately as soon as the chunks arrive!
+    // 2. Also send in-band BinaryFrameType.BLOCK_END frame over data route
+    // so multi-route / parallel lanes can verify the block immediately without waiting for ctl
     try {
-      const ctlBytes = textEncoder.encode(JSON.stringify(blockEndPayload));
-      const inBandCtlFrame = encodeBinaryFrame(
+      const endPayloadBytes = textEncoder.encode(JSON.stringify(blockEndPayload));
+      const inBandEndFrame = encodeBinaryFrame(
         {
-          type: BinaryFrameType.CONTROL,
+          type: BinaryFrameType.BLOCK_END,
           transferIdNum: this.transferIdNum,
           fileIndex: this.fileIndex,
           blockIndex,
-          chunkIndex: numChunks,
+          chunkIndex: 0xffff,
         },
-        ctlBytes
+        endPayloadBytes
       );
-      void this.callbacks.sendDataChannel(inBandCtlFrame);
-    } catch {}
+      await this.callbacks.sendDataChannel(inBandEndFrame);
+    } catch {
+      /* control channel fallback already sent */
+    }
 
     this.scheduleSmartBlockWatchdog(blockIndex);
   }

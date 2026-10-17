@@ -102,11 +102,18 @@ export class FileReceiverPipeline {
   }
 
   public handleDataFrame(rawFrame: Uint8Array) {
+    let decoded: ReturnType<typeof decodeBinaryFrame>;
     try {
-      const { header, payload } = decodeBinaryFrame(rawFrame);
+      decoded = decodeBinaryFrame(rawFrame);
+    } catch {
+      return;
+    }
+
+    try {
+      const { header, payload } = decoded;
       if (header.transferIdNum !== this.transferIdNum) return;
 
-      if (header.type === BinaryFrameType.CONTROL) {
+      if (header.type === BinaryFrameType.BLOCK_END) {
         try {
           const endPayload = JSON.parse(textDecoder.decode(payload)) as BlockEndPayload;
           if (endPayload && typeof endPayload.blockIndex === 'number') {
