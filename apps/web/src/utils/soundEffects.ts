@@ -23,12 +23,8 @@ class SoundEffectsManager {
 
   public setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('mog_sound_enabled', enabled ? 'true' : 'false');
-      }
-    } catch {
-      // ignore storage errors
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('mog_sound_enabled', enabled ? 'true' : 'false');
     }
   }
 

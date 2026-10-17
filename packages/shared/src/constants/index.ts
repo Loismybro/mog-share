@@ -13,46 +13,46 @@ export const MAX_CHUNK_SIZE = 64 * 1024; // 64 KiB ceiling
 export const DEFAULT_BLOCK_SIZE = 2 * 1024 * 1024; // 2 MiB blocks for fast streaming ACK turnaround & zero main-thread stutter
 
 // Flow control watermarks (Layer 1 - Transport)
-export const BUFFERED_AMOUNT_LOW_THRESHOLD = 512 * 1024; // 512 KiB low watermark
-export const BUFFERED_AMOUNT_HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MiB high watermark for full LAN Wi-Fi saturation
+export const BUFFERED_AMOUNT_LOW_THRESHOLD = 1024 * 1024; // 1 MiB low watermark
+export const BUFFERED_AMOUNT_HIGH_WATERMARK = 8 * 1024 * 1024; // 8 MiB high watermark for full LAN Wi-Fi saturation
 
 // Credit-based flow control (Layer 2 - Application)
-export const DEFAULT_CREDIT_WINDOW_BLOCKS = 8; // 8 blocks = 16 MiB in-flight window
-export const MIN_CREDIT_WINDOW_BLOCKS = 4;
-export const MAX_CREDIT_WINDOW_BLOCKS = 16;
-export const MAX_BLOCK_RETRIES = 3;
+export const DEFAULT_CREDIT_WINDOW_BLOCKS = 16; // 16 blocks = 32 MiB in-flight window
+export const MIN_CREDIT_WINDOW_BLOCKS = 8;
+export const MAX_CREDIT_WINDOW_BLOCKS = 32;
+export const MAX_BLOCK_RETRIES = 4;
 
 // Storage strategy limits
-export const MEMORY_WRITER_MAX_BYTES = 200 * 1024 * 1024; // 200 MB ceiling for memory fallback
-export const MEMORY_WRITER_WARN_BYTES = 100 * 1024 * 1024;
-export const STORAGE_QUOTA_SAFETY_MARGIN_PERCENT = 10;
-export const OPFS_TEMP_FILE_EXPIRY_MS = 10 * 60 * 1000;
+export const MEMORY_WRITER_MAX_BYTES = 500 * 1024 * 1024; // 500 MB ceiling for memory fallback
+export const MEMORY_WRITER_WARN_BYTES = 250 * 1024 * 1024;
+export const STORAGE_QUOTA_SAFETY_MARGIN_PERCENT = 5;
+export const OPFS_TEMP_FILE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour so active session files never expire prematurely
 export const TRANSFER_JOURNAL_DEBOUNCE_MS = 1000;
 export const TRANSFER_JOURNAL_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Network & WebRTC
 // ---------------------------------------------------------------------------
-export const DUAL_STACK_PROBE_TIMEOUT_MS = 2500;
-export const LOCAL_GROUP_DISCONNECT_GRACE_MS = 15000; // 15 s grace period
+export const DUAL_STACK_PROBE_TIMEOUT_MS = 1200;
+export const LOCAL_GROUP_DISCONNECT_GRACE_MS = 8000; // 8 s grace period
 export const LOCAL_GROUP_MAX_VISIBLE = 24;
 
 export const ICE_CANDIDATE_POOL_SIZE = 4;
-export const ICE_CONNECTING_MAX_MS = 8000;
-export const ICE_DISCONNECTED_GRACE_MS = 4000;
-export const ICE_PROBE_PONG_TIMEOUT_MS = 3000;
-export const ICE_BACKGROUND_UPGRADE_INTERVAL_MS = 15000;
+export const ICE_CONNECTING_MAX_MS = 6000;
+export const ICE_DISCONNECTED_GRACE_MS = 3500;
+export const ICE_PROBE_PONG_TIMEOUT_MS = 2500;
+export const ICE_BACKGROUND_UPGRADE_INTERVAL_MS = 10000;
 export const STATS_POLL_INTERVAL_MS = 1500;
 
 // Signaling transport ladder & heartbeat
-export const WS_CONNECT_TIMEOUT_MS = 9000; // 9 s so Render cold starts don't prematurely drop to POLL
-export const TRANSPORT_LADDER_REATTEMPT_MS = 20000; // 20 s fast upgrade back to WebSocket if on SSE/Poll
-export const HEARTBEAT_INTERVAL_MS = 15000;
+export const WS_CONNECT_TIMEOUT_MS = 7000;
+export const TRANSPORT_LADDER_REATTEMPT_MS = 15000;
+export const HEARTBEAT_INTERVAL_MS = 10000;
 export const HEARTBEAT_MAX_MISSES = 3;
-export const RECONNECT_BASE_DELAY_MS = 400;
-export const RECONNECT_MAX_DELAY_MS = 8000;
-export const MAX_SIGNALING_MESSAGE_SIZE = 512 * 1024; // 512 KiB max signaling/relay frame
-export const RATE_LIMIT_MESSAGES_PER_SEC = 150; // Allow high-rate signaling & ICE trickle bursts
+export const RECONNECT_BASE_DELAY_MS = 300;
+export const RECONNECT_MAX_DELAY_MS = 5000;
+export const MAX_SIGNALING_MESSAGE_SIZE = 1024 * 1024; // 1 MiB max signaling/relay frame
+export const RATE_LIMIT_MESSAGES_PER_SEC = 400; // Allow high-rate signaling & relay bursts
 export const MISSED_MESSAGES_BUFFER_SEC = 90;
 export const MISSED_MESSAGES_BUFFER_MAX = 400;
 

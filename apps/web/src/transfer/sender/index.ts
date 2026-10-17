@@ -263,19 +263,23 @@ export class FileSenderPipeline {
         chunkBytes
       );
 
-      await this.callbacks.sendDataChannel(frame);
+      const maybePromise = this.callbacks.sendDataChannel(frame);
+      if (maybePromise && typeof (maybePromise as Promise<void>).then === 'function') {
+        await maybePromise;
+      } else if (c % 16 === 15) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
 
       const currentInFlight = startByte + cEnd;
       if (currentInFlight > this.rawBytesSent) {
         this.rawBytesSent = Math.min(this.file.size, currentInFlight);
       }
 
-      if (this.callbacks.onChunkProgress && (c % 6 === 0 || c === numChunks - 1)) {
+      if (this.callbacks.onChunkProgress && (c % 8 === 0 || c === numChunks - 1)) {
         const elapsed = Math.max(0.05, (Date.now() - this.startTime) / 1000);
-        // Clamp unacknowledged progress to at most acknowledgedBytes + 2 blocks so UI never jumps to fake 99%
         const honestBytes = Math.min(
           this.rawBytesSent,
-          this.acknowledgedBytes + this.blockSize * 2
+          this.acknowledgedBytes + this.blockSize * 3
         );
         this.callbacks.onChunkProgress(
           honestBytes,

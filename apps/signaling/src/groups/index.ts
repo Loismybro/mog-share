@@ -13,6 +13,7 @@ export interface DeviceSession {
   deviceType?: string;
   batteryLevel?: number;
   isCharging?: boolean;
+  clientIp?: string;
   networkKeys: Set<string>;
   connectedAt: number;
   lastSeen: number;
@@ -29,8 +30,13 @@ export class LocalGroupIndex {
   // resumeToken -> deviceId
   private tokenToDeviceId = new Map<string, string>();
 
-  public registerDevice(session: DeviceSession): { tooManyDevices: boolean } {
-    // Clean up old keys if re-registering existing device
+  public registerDevice(session: DeviceSession): {
+    tooManyDevices: boolean;
+    evictedDeviceIds: string[];
+  } {
+    const evictedDeviceIds: string[] = [];
+
+    // 1. Clean up old keys if re-registering existing deviceId
     const existing = this.devices.get(session.deviceId);
     if (existing) {
       if (existing.disconnectTimer) clearTimeout(existing.disconnectTimer);
@@ -41,6 +47,24 @@ export class LocalGroupIndex {
           s.delete(session.deviceId);
           if (s.size === 0) this.keyToDevices.delete(k);
         }
+      }
+    }
+
+    // 2. Evict any stale/ghost sessions from the exact same physical device
+    // (e.g. same clientIp + name + platform + model that is disconnecting or superseded)
+    for (const [otherId, other] of Array.from(this.devices.entries())) {
+      if (otherId === session.deviceId) continue;
+      const sameHardware =
+        other.name === session.name &&
+        other.platform === session.platform &&
+        (other.model || '') === (session.model || '');
+      const sameNetwork =
+        (session.clientIp && other.clientIp === session.clientIp) ||
+        Array.from(session.networkKeys).some((k) => other.networkKeys.has(k));
+
+      if (sameHardware && sameNetwork && (other.disconnectTimer || Date.now() - other.lastSeen > 8000)) {
+        this.removeDevice(otherId);
+        evictedDeviceIds.push(otherId);
       }
     }
 
@@ -58,7 +82,7 @@ export class LocalGroupIndex {
 
     const visiblePeers = this.getVisiblePeers(session.deviceId);
     const tooManyDevices = visiblePeers.length > LOCAL_GROUP_MAX_VISIBLE;
-    return { tooManyDevices };
+    return { tooManyDevices, evictedDeviceIds };
   }
 
   public getSession(deviceId: string): DeviceSession | undefined {
@@ -84,7 +108,7 @@ export class LocalGroupIndex {
 
   /**
    * Two devices are in the same local group if their key sets overlap in ANY key.
-   * Only returns devices whose heartbeat round trip has completed.
+   * Deduplicates ghost entries from the same physical hardware so a device never appears twice.
    */
   public getVisiblePeers(deviceId: string): DeviceSession[] {
     const self = this.devices.get(deviceId);
@@ -102,14 +126,28 @@ export class LocalGroupIndex {
       }
     }
 
-    const result: DeviceSession[] = [];
+    const rawCandidates: DeviceSession[] = [];
     for (const pid of peerIds) {
       const s = this.devices.get(pid);
       if (s && s.heartbeatComplete) {
-        result.push(s);
+        rawCandidates.push(s);
       }
     }
-    return result;
+
+    // Sort newest lastSeen first and deduplicate by physical device signature if one is a stale ghost
+    rawCandidates.sort((a, b) => b.lastSeen - a.lastSeen);
+    const bySignature = new Map<string, DeviceSession>();
+    for (const cand of rawCandidates) {
+      const sig = `${cand.clientIp || ''}|${cand.name}|${cand.platform}|${cand.model || ''}|${cand.os || ''}`;
+      const prev = bySignature.get(sig);
+      if (!prev) {
+        bySignature.set(sig, cand);
+      } else if (!cand.disconnectTimer && prev.disconnectTimer) {
+        bySignature.set(sig, cand);
+      }
+    }
+
+    return Array.from(bySignature.values());
   }
 
   public scheduleDisconnect(deviceId: string, onRemove: (departedPeers: DeviceSession[]) => void) {

@@ -1,0 +1,5 @@
+{
+  "name": "MogShare — Neural P2P File Sharing",
+  "description": "Zero-data local Wi-Fi and encrypted online room file sharing across Android, iOS, macOS, Windows, and Linux with 3D neural thread sphere discovery.",
+  "requestFramePermissions": []
+}

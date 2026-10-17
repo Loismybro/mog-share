@@ -3,6 +3,7 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import zlib from 'zlib';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -25,7 +26,11 @@ import { ServerMetrics, handleHealthz, handleMetrics } from './health/index.js';
 import { RelayBandwidthLimiter } from './relay/index.js';
 import { Gateway } from './gateway/index.js';
 
-const PORT = parseInt(process.env.PORT || '4000', 10);
+const PORT = parseInt(
+  process.env.SIGNALING_PORT ||
+    (process.env.NODE_ENV === 'production' ? process.env.PORT || '4000' : '4000'),
+  10
+);
 const SERVER_SALT = process.env.SERVER_SALT || crypto.randomBytes(32).toString('hex');
 const COTURN_SECRET = process.env.COTURN_SECRET || 'shareapp_secret_coturn_auth_key';
 const COTURN_REALM = process.env.COTURN_REALM || '';
@@ -38,7 +43,6 @@ app.use(express.json({ limit: `${MAX_SIGNALING_MESSAGE_SIZE}b` }));
 
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   next();
 });
@@ -74,7 +78,6 @@ function schedulePeerAndRoomDisconnect(departingId: string) {
         createEnvelope('peer-left', { deviceId: departingId })
       );
     }
-    // Only leave rooms after the grace period expires without reconnection
     const userRooms = roomManager.getRoomsForDevice(departingId);
     for (const room of userRooms) {
       roomManager.leaveRoom(room.code, departingId);
@@ -91,6 +94,136 @@ function schedulePeerAndRoomDisconnect(departingId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure Node ZIP Builder for Project Export (/api/project-zip)
+// ---------------------------------------------------------------------------
+const CRC_TABLE = new Uint32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) {
+    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  CRC_TABLE[n] = c >>> 0;
+}
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function collectProjectFiles(rootDir: string): Array<{ relPath: string; data: Buffer }> {
+  const results: Array<{ relPath: string; data: Buffer }> = [];
+  const skipDirs = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    '.aistudio',
+    '.next',
+    '.turbo',
+    'coverage',
+  ]);
+  const skipFiles = new Set(['.DS_Store', 'bun.lock']);
+
+  function walk(currentDir: string) {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) continue;
+        walk(path.join(currentDir, entry.name));
+      } else if (entry.isFile()) {
+        if (skipFiles.has(entry.name) || entry.name.endsWith('.zip')) continue;
+        const fullPath = path.join(currentDir, entry.name);
+        const relPath = path.relative(rootDir, fullPath).split(path.sep).join('/');
+        try {
+          const stat = fs.statSync(fullPath);
+          if (stat.size > 5 * 1024 * 1024) continue;
+          results.push({ relPath, data: fs.readFileSync(fullPath) });
+        } catch {
+          /* ignore unreadable */
+        }
+      }
+    }
+  }
+
+  walk(rootDir);
+  return results;
+}
+
+function buildZipArchive(files: Array<{ relPath: string; data: Buffer }>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.relPath, 'utf8');
+    const crc = crc32(file.data);
+    const compressed = zlib.deflateRawSync(file.data);
+    const useDeflate = compressed.length < file.data.length;
+    const payload = useDeflate ? compressed : file.data;
+    const method = useDeflate ? 8 : 0;
+
+    const localHeader = Buffer.alloc(30 + nameBuf.length);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(method, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0x5421, 12);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(payload.length, 18);
+    localHeader.writeUInt32LE(file.data.length, 22);
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    nameBuf.copy(localHeader, 30);
+
+    localParts.push(localHeader, payload);
+
+    const centralHeader = Buffer.alloc(46 + nameBuf.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(method, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0x5421, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(payload.length, 20);
+    centralHeader.writeUInt32LE(file.data.length, 24);
+    centralHeader.writeUInt16LE(nameBuf.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    nameBuf.copy(centralHeader, 46);
+
+    centralParts.push(centralHeader);
+    offset += localHeader.length + payload.length;
+  }
+
+  const centralSize = centralParts.reduce((acc, b) => acc + b.length, 0);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(centralSize, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, ...centralParts, eocd]);
+}
+
+// ---------------------------------------------------------------------------
 // HTTP Endpoints
 // ---------------------------------------------------------------------------
 app.get('/healthz', handleHealthz);
@@ -103,6 +236,26 @@ app.get('/api/health', (_req, res) => {
   });
 });
 app.get('/metrics', (req, res) => handleMetrics(req, res, metrics));
+
+app.get('/api/project-zip', (_req, res) => {
+  try {
+    const candidates = [
+      process.cwd(),
+      path.resolve(process.cwd(), '../..'),
+    ];
+    const rootDir =
+      candidates.find((c) => fs.existsSync(path.join(c, 'apps')) && fs.existsSync(path.join(c, 'packages'))) ||
+      process.cwd();
+    const files = collectProjectFiles(rootDir);
+    const zipBuffer = buildZipArchive(files);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="mogshare-github-ready.zip"');
+    res.setHeader('Content-Length', String(zipBuffer.length));
+    res.send(zipBuffer);
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 app.get('/api/info', (req, res) => {
   const addresses: string[] = [];
@@ -319,12 +472,17 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   });
 });
 
-function ensureDeviceSession(from: string, clientIp: string, payload?: Record<string, unknown>): DeviceSession {
+function ensureDeviceSession(
+  from: string,
+  clientIp: string,
+  payload?: Record<string, unknown>
+): DeviceSession {
   let sess = groupIndex.getSession(from);
   if (sess) {
     groupIndex.cancelDisconnect(from);
     sess.lastSeen = Date.now();
     sess.heartbeatComplete = true;
+    sess.clientIp = clientIp;
     return sess;
   }
   const connNetworkKey = deriveNetworkKey(clientIp, SERVER_SALT);
@@ -333,6 +491,7 @@ function ensureDeviceSession(from: string, clientIp: string, payload?: Record<st
     deviceId: from,
     name: String(payload?.name || `Device (${from.slice(0, 4)})`).slice(0, 48),
     platform: (payload?.platform as string) || 'web',
+    clientIp,
     networkKeys: combinedKeys,
     connectedAt: Date.now(),
     lastSeen: Date.now(),
@@ -374,6 +533,7 @@ function handleIncomingSocketMessage(
         deviceType: payload.deviceType ? String(payload.deviceType).slice(0, 24) : undefined,
         batteryLevel: typeof payload.batteryLevel === 'number' ? payload.batteryLevel : undefined,
         isCharging: typeof payload.isCharging === 'boolean' ? payload.isCharging : undefined,
+        clientIp,
         networkKeys: combinedKeys,
         connectedAt: Date.now(),
         lastSeen: Date.now(),
@@ -381,7 +541,17 @@ function handleIncomingSocketMessage(
         resumeToken,
       };
 
-      const { tooManyDevices } = groupIndex.registerDevice(session);
+      const { tooManyDevices, evictedDeviceIds } = groupIndex.registerDevice(session);
+      for (const evictedId of evictedDeviceIds) {
+        const visible = groupIndex.getVisiblePeers(from);
+        for (const peer of visible) {
+          gateway.sendToClient(
+            peer.deviceId,
+            createEnvelope('peer-left', { deviceId: evictedId })
+          );
+        }
+      }
+
       ws.send(
         JSON.stringify(
           createEnvelope('joined-local', {
@@ -559,6 +729,29 @@ function handleIncomingSocketMessage(
         return;
       }
 
+      // Evict any ghost peerId in the room that belongs to the exact same physical device
+      for (const peerId of Array.from(joinResult.room!.peerIds)) {
+        if (peerId === from) continue;
+        const s = groupIndex.getSession(peerId);
+        if (
+          s &&
+          s.name === joinerSession.name &&
+          s.platform === joinerSession.platform &&
+          (s.model || '') === (joinerSession.model || '') &&
+          s.clientIp === joinerSession.clientIp
+        ) {
+          roomManager.leaveRoom(code, peerId);
+          for (const notifyId of joinResult.room!.peerIds) {
+            if (notifyId !== peerId) {
+              gateway.sendToClient(
+                notifyId,
+                createEnvelope('peer-left-room', { peerId, roomCode: code })
+              );
+            }
+          }
+        }
+      }
+
       const existingPeers = Array.from(joinResult.room!.peerIds)
         .filter((peerId) => peerId !== from)
         .map((peerId) => {
@@ -628,7 +821,6 @@ function verifyPeerSharing(peerA: string, peerB: string): boolean {
   if (roomManager.arePeersInSameRoom(peerA, peerB)) return true;
   const peersA = groupIndex.getVisiblePeers(peerA);
   if (peersA.some((p) => p.deviceId === peerB)) return true;
-  // Also allow signaling between any two active registered sessions on the server
   if (groupIndex.getSession(peerA) && groupIndex.getSession(peerB)) return true;
   return false;
 }

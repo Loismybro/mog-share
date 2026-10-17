@@ -71,16 +71,38 @@ export function normalizeRoomCode(raw: string): string {
 
 export function getPersistentDeviceId(): string {
   try {
-    const tabId = sessionStorage.getItem('mog_tab_device_id');
-    if (tabId && /^[\w-]{8,64}$/.test(tabId)) return tabId;
+    const existingTabId = sessionStorage.getItem('mog_tab_device_id');
+    if (existingTabId && /^[\w-]{8,64}$/.test(existingTabId)) {
+      return existingTabId;
+    }
   } catch {}
 
-  const id = generateEphemeralDeviceId();
+  let baseId = safeGet('mog_device_id');
+  if (!baseId || !/^[\w-]{8,64}$/.test(baseId)) {
+    baseId = generateEphemeralDeviceId();
+    safeSet('mog_device_id', baseId);
+  }
+
+  // Check if another tab in the same browser is actively heartbeating with baseId
+  let finalId = baseId;
   try {
-    sessionStorage.setItem('mog_tab_device_id', id);
+    const lastActive = Number(localStorage.getItem('mog_device_active_ts') || '0');
+    const activeHolder = localStorage.getItem('mog_device_active_tab') || '';
+    const myTabToken =
+      sessionStorage.getItem('mog_tab_token') || Math.random().toString(36).slice(2, 10);
+    sessionStorage.setItem('mog_tab_token', myTabToken);
+
+    if (activeHolder && activeHolder !== myTabToken && Date.now() - lastActive < 4500) {
+      // Another tab in this browser is open right now; derive a secondary tab ID
+      finalId = `${baseId.slice(0, 24)}_${myTabToken.slice(0, 6)}`;
+    } else {
+      localStorage.setItem('mog_device_active_tab', myTabToken);
+      localStorage.setItem('mog_device_active_ts', String(Date.now()));
+    }
+    sessionStorage.setItem('mog_tab_device_id', finalId);
   } catch {}
-  safeSet('mog_device_id', id);
-  return id;
+
+  return finalId;
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -144,7 +166,18 @@ export class NetworkService {
   private localBusTimer: ReturnType<typeof setInterval> | null = null;
 
   private state: ConnState = 'idle';
-  private probeResult: ProbeResult | null = null;
+  private probeResult: ProbeResult = {
+    v4Ip: null,
+    v6Ip: null,
+    stunV4Ip: null,
+    stunV6Ip: null,
+    networkKeys: ['local-lan'],
+    warnings: {
+      isVpnDetected: false,
+      isPrivateRelayDetected: false,
+      isIpv6ProbeFailed: false,
+    },
+  };
   private iceServers: IceServerConfig[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -153,6 +186,7 @@ export class NetworkService {
 
   private visiblePeers = new Map<string, Device>();
   private roomPeers = new Map<string, Device>();
+  private peerLastUpdated = new Map<string, number>();
   private currentRoomCode: string | null = null;
   private roomPassphrase: string | null = null;
 
@@ -170,6 +204,7 @@ export class NetworkService {
   private seenCtl = new Set<string>();
   private latencyMs: number | null = null;
   private lastPingSent = 0;
+  private relayFrameCounter = 0;
   private pendingRoomAction: (() => void) | null = null;
 
   constructor(
@@ -269,17 +304,60 @@ export class NetworkService {
     this.emitVisiblePeers();
   }
 
-  private emitVisiblePeers() {
-    const merged = new Map<string, Device>();
-    for (const [id, p] of this.visiblePeers) {
-      if (id !== this.deviceId) merged.set(id, p);
+  /**
+   * Deduplicates peers by both ID and hardware signature (name + platform + model)
+   * so the same Android/iOS/desktop device never appears twice after re-scanning or room sharing.
+   */
+  private deduplicateDeviceList(rawList: Device[]): Device[] {
+    const byId = new Map<string, Device>();
+    for (const d of rawList) {
+      if (!d || !d.id || d.id === this.deviceId) continue;
+      byId.set(d.id, d);
     }
-    for (const [id, entry] of this.localBusPeers) {
-      if (id !== this.deviceId && !merged.has(id)) {
-        merged.set(id, entry.device);
+
+    const sorted = Array.from(byId.values()).sort((a, b) => {
+      const tA = this.peerLastUpdated.get(a.id) || 0;
+      const tB = this.peerLastUpdated.get(b.id) || 0;
+      return tB - tA;
+    });
+
+    const bySignature = new Map<string, Device>();
+    for (const d of sorted) {
+      const isLocalTab = this.localBusPeers.has(d.id);
+      const sig = isLocalTab
+        ? `tab:${d.id}`
+        : `hw:${d.name.trim().toLowerCase()}|${d.platform}|${(d.model || '').trim().toLowerCase()}`;
+      if (!bySignature.has(sig)) {
+        bySignature.set(sig, d);
+      } else {
+        const existing = bySignature.get(sig)!;
+        const dOpen = this.peerBundles.get(d.id)?.peerSession.data.readyState === 'open';
+        const exOpen = this.peerBundles.get(existing.id)?.peerSession.data.readyState === 'open';
+        if (dOpen && !exOpen) {
+          bySignature.set(sig, d);
+        }
       }
     }
-    this.callbacks.onPeersChanged(Array.from(merged.values()));
+
+    return Array.from(bySignature.values());
+  }
+
+  private emitVisiblePeers() {
+    const combined: Device[] = [];
+    for (const [id, p] of this.visiblePeers) {
+      if (id !== this.deviceId) combined.push(p);
+    }
+    for (const [id, entry] of this.localBusPeers) {
+      if (id !== this.deviceId && !this.visiblePeers.has(id)) {
+        combined.push(entry.device);
+      }
+    }
+    this.callbacks.onPeersChanged(this.deduplicateDeviceList(combined));
+  }
+
+  private emitRoomPeers() {
+    const list = Array.from(this.roomPeers.values()).filter((p) => p.id !== this.deviceId);
+    this.callbacks.onRoomPeers(this.deduplicateDeviceList(list));
   }
 
   /**
@@ -308,6 +386,7 @@ export class NetworkService {
 
         switch (msg.kind) {
           case 'presence': {
+            this.peerLastUpdated.set(msg.from, Date.now());
             const dev: Device = {
               id: msg.from,
               name: msg.name || 'Local Tab',
@@ -351,6 +430,14 @@ export class NetworkService {
             break;
           }
           case 'relay-frame': {
+            if (msg.binary instanceof Uint8Array) {
+              this.handleDataFrame(msg.binary);
+              break;
+            }
+            if (msg.binary instanceof ArrayBuffer) {
+              this.handleDataFrame(new Uint8Array(msg.binary));
+              break;
+            }
             const bundle = this.getOrCreatePeerBundle(msg.from);
             if (msg.encrypted && bundle.hasDerivedSharedKey) {
               void bundle.relayTransport.handleIncomingRelayFrame(msg.data as string);
@@ -374,17 +461,23 @@ export class NetworkService {
 
       this.broadcastLocalBusPresence(true);
       this.localBusTimer = setInterval(() => {
+        try {
+          const myTabToken = sessionStorage.getItem('mog_tab_token');
+          if (myTabToken && localStorage.getItem('mog_device_active_tab') === myTabToken) {
+            localStorage.setItem('mog_device_active_ts', String(Date.now()));
+          }
+        } catch {}
         this.broadcastLocalBusPresence(false);
         const now = Date.now();
         let changed = false;
         for (const [id, entry] of this.localBusPeers) {
-          if (now - entry.lastSeen > 14_000) {
+          if (now - entry.lastSeen > 12_000) {
             this.localBusPeers.delete(id);
             changed = true;
           }
         }
         if (changed) this.emitVisiblePeers();
-      }, 4000);
+      }, 3500);
 
       if (typeof window !== 'undefined') {
         window.addEventListener('beforeunload', () => {
@@ -418,24 +511,17 @@ export class NetworkService {
   }
 
   // -------------------------------------------------------------------------
-  // Signaling Initialization
+  // Instant Signaling Initialization (Zero Blocking on STUN/IPv6 Probes)
   // -------------------------------------------------------------------------
   private async initialize() {
     this.setState('connecting', 'Connecting to discovery network…');
 
     try {
-      await this.fetchTurnCredentials();
-
-      this.probeResult = await probeNetwork(this.serverUrl, this.iceServers);
-
-      if (this.probeResult.warnings.message) {
-        this.callbacks.onError(this.probeResult.warnings.message);
-      }
-
       if (this.signaling) {
         this.signaling.destroy();
       }
 
+      // 1. Connect WebSocket IMMEDIATELY so devices appear in <100ms
       this.signaling = new SignalingLadderClient(this.deviceId, this.serverUrl, {
         onMessage: (envelope) => this.handleSignalingEnvelope(envelope),
         onStateChange: (state, _rung) => {
@@ -467,7 +553,20 @@ export class NetworkService {
         },
       });
 
-      await this.signaling.connect();
+      const connectPromise = this.signaling.connect();
+
+      // 2. Run TURN credentials & dual-stack STUN network probe in parallel in background
+      void (async () => {
+        await this.fetchTurnCredentials();
+        const probed = await probeNetwork(this.serverUrl, this.iceServers);
+        if (this.destroyed) return;
+        this.probeResult = probed;
+        if (this.signaling && this.state === 'ready') {
+          this.sendJoinMessage();
+        }
+      })();
+
+      await connectPromise;
     } catch (err: unknown) {
       this.setState('error', (err as Error).message);
     }
@@ -489,7 +588,7 @@ export class NetworkService {
   }
 
   private sendJoinMessage() {
-    if (!this.signaling || !this.probeResult) return;
+    if (!this.signaling) return;
     this.signaling.send('join', {
       name: this.deviceName,
       platform: this.platform,
@@ -499,7 +598,7 @@ export class NetworkService {
       deviceType: this.deviceProfile?.deviceType,
       batteryLevel: this.deviceProfile?.batteryLevel,
       isCharging: this.deviceProfile?.isCharging,
-      networkKeys: this.probeResult.networkKeys,
+      networkKeys: this.probeResult?.networkKeys || ['local-lan'],
       resumeToken: this.signaling.getResumeToken(),
     });
     this.lastPingSent = Date.now();
@@ -520,6 +619,7 @@ export class NetworkService {
     },
     connType = 'Local Wi-Fi · Zero Data'
   ): Device {
+    this.peerLastUpdated.set(p.id, Date.now());
     const existing = this.visiblePeers.get(p.id) || this.roomPeers.get(p.id);
     const bundle = this.peerBundles.get(p.id);
     const isDirectOpen = bundle?.peerSession.data.readyState === 'open';
@@ -608,6 +708,17 @@ export class NetworkService {
           isCharging?: boolean;
         };
         if (p.id && p.id !== this.deviceId) {
+          // Remove any older entry in visiblePeers with the exact same name+platform+model
+          for (const [oldId, oldPeer] of Array.from(this.visiblePeers.entries())) {
+            if (
+              oldId !== p.id &&
+              oldPeer.name === p.name &&
+              oldPeer.platform === p.platform &&
+              (oldPeer.model || '') === (p.model || '')
+            ) {
+              this.visiblePeers.delete(oldId);
+            }
+          }
           const isNew = !this.visiblePeers.has(p.id);
           this.visiblePeers.set(p.id, this.mapRawPeerToDevice(p, 'Local Wi-Fi · Zero Data'));
           this.prewarmPeer(p.id);
@@ -652,6 +763,7 @@ export class NetworkService {
             batteryLevel?: number;
             isCharging?: boolean;
           }>) || [];
+        this.roomPeers.clear();
         for (const p of peers) {
           if (p.id !== this.deviceId) {
             this.roomPeers.set(p.id, this.mapRawPeerToDevice(p, 'Online Room'));
@@ -660,7 +772,7 @@ export class NetworkService {
         }
         soundEffects.play('devicePaired');
         this.callbacks.onRoomJoined(code);
-        this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+        this.emitRoomPeers();
         break;
       }
 
@@ -674,7 +786,7 @@ export class NetworkService {
         const pId = payload.peerId as string;
         if (pId) {
           this.roomPeers.delete(pId);
-          this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+          this.emitRoomPeers();
         }
         break;
       }
@@ -701,6 +813,15 @@ export class NetworkService {
       case 'peer-joined-room': {
         const pId = (payload.peerId as string) || (payload.id as string);
         if (pId && pId !== this.deviceId) {
+          for (const [oldId, oldPeer] of Array.from(this.roomPeers.entries())) {
+            if (
+              oldId !== pId &&
+              oldPeer.name === (payload.name as string) &&
+              oldPeer.platform === ((payload.platform as Platform) || 'web')
+            ) {
+              this.roomPeers.delete(oldId);
+            }
+          }
           const isNew = !this.roomPeers.has(pId);
           this.roomPeers.set(
             pId,
@@ -724,7 +845,7 @@ export class NetworkService {
             haptics.play('deviceFound');
             soundEffects.play('devicePaired');
           }
-          this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+          this.emitRoomPeers();
         }
         break;
       }
@@ -791,7 +912,7 @@ export class NetworkService {
               : 'Cloud Bridge';
           this.emitVisiblePeers();
           if (this.roomPeers.has(remoteDeviceId)) {
-            this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+            this.emitRoomPeers();
           }
         }
       },
@@ -805,7 +926,7 @@ export class NetworkService {
           peer.availableBitrateBps = stats.availableBitrateBps;
           this.emitVisiblePeers();
           if (this.roomPeers.has(remoteDeviceId)) {
-            this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+            this.emitRoomPeers();
           }
         }
       },
@@ -847,7 +968,7 @@ export class NetworkService {
           peer.connType = 'Local Wi-Fi · Zero Data';
           this.emitVisiblePeers();
           if (this.roomPeers.has(remoteDeviceId)) {
-            this.callbacks.onRoomPeers(Array.from(this.roomPeers.values()));
+            this.emitRoomPeers();
           }
         }
       },
@@ -909,7 +1030,6 @@ export class NetworkService {
     if (bundle.peerSession.ctl.readyState === 'open') {
       bundle.peerSession.sendCtl(envelopeWithId);
     } else {
-      // Send over signaling AND localBus immediately
       this.signaling?.send('signal', { ctl: envelopeWithId }, remoteDeviceId);
       try {
         this.localBus?.postMessage({
@@ -924,53 +1044,54 @@ export class NetworkService {
 
   /**
    * High-speed hybrid transport:
-   * 1. Always checks if the Direct WebRTC DataChannel is open on EVERY frame (so even if a transfer
-   *    started on Cloud Relay while ICE was still negotiating, it immediately upgrades to Direct Wi-Fi!).
-   * 2. On the first frame, waits up to 5 seconds for WebRTC DataChannel to open before falling back to Relay.
-   * 3. When using Cloud Relay (e.g., cross-network Online Room behind strict Symmetric NAT),
-   *    paces frames smoothly so the WebSocket never overflows or stalls at 99%.
+   * - Uses synchronous WebRTC DataChannel burst when open (0ms await overhead).
+   * - Uses direct binary BroadcastChannel for local same-browser tabs.
+   * - Streams immediately over WebSocket relay while WebRTC negotiates in parallel,
+   *   and upgrades mid-transfer to Direct Wi-Fi the instant DataChannel opens!
    */
-  private async sendDataFrameHybrid(
+  private sendDataFrameHybrid(
     remoteDeviceId: string,
     bundle: PeerConnectionBundle,
     frame: Uint8Array,
     transfer: TransferFile
-  ): Promise<void> {
+  ): Promise<void> | void {
     const ps = bundle.peerSession;
 
-    // 1. Always prefer Direct WebRTC DataChannel if open!
+    // 1. Direct WebRTC DataChannel (Synchronous fast-path for maximum LAN/Wi-Fi throughput!)
     if (ps.data.readyState === 'open') {
       transfer.channel = 'direct';
       ps.sendData(frame);
       return;
     }
 
-    // 2. If not yet marked relay, kick negotiation and wait up to 4.5s for direct P2P channel
-    if (transfer.channel !== 'relay') {
-      void ps.ensureNegotiationStarted();
-      const opened = await ps.whenDataOpen(4500);
-      if (opened && ps.data.readyState === 'open') {
-        transfer.channel = 'direct';
-        ps.sendData(frame);
+    // 2. Same-browser multi-tab BroadcastChannel binary fast-path
+    if (this.localBus && this.localBusPeers.has(remoteDeviceId)) {
+      transfer.channel = 'direct';
+      try {
+        this.localBus.postMessage({
+          kind: 'relay-frame',
+          from: this.deviceId,
+          to: remoteDeviceId,
+          binary: frame,
+        });
         return;
+      } catch {
+        /* fallback below */
       }
-      transfer.channel = 'relay';
     }
 
-    // 3. Cloud / LocalBus Relay fallback with smooth pacing so WebSocket never overflows
+    // 3. Kick WebRTC negotiation in background so it upgrades to Direct as soon as ICE completes
+    void ps.ensureNegotiationStarted();
+
+    // 4. High-speed pipelined WebSocket relay (only yield every 8 frames so throughput stays fast)
+    transfer.channel = 'relay';
     const b64 = uint8ToBase64(frame);
     this.signaling?.send('relay-frame', { data: b64, raw: true }, remoteDeviceId);
-    try {
-      this.localBus?.postMessage({
-        kind: 'relay-frame',
-        from: this.deviceId,
-        to: remoteDeviceId,
-        encrypted: false,
-        data: b64,
-      });
-    } catch {}
-    // Yield briefly every relay chunk so signaling socket and event loop stay responsive
-    await new Promise((r) => setTimeout(r, 4));
+
+    this.relayFrameCounter++;
+    if (this.relayFrameCounter % 8 === 0) {
+      return new Promise((r) => setTimeout(r, 2));
+    }
   }
 
   private clearRequestRetry(transferId: string) {
@@ -1002,7 +1123,6 @@ export class NetworkService {
         const transferId = payload.transferId as string;
         const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
 
-        // If we already accepted this transferId (e.g. sender retried request-transfer), re-send accept-transfer!
         if (this.activeReceivers.has(transferId)) {
           this.sendCtlReliable(remoteDeviceId, {
             type: 'accept-transfer',
@@ -1014,7 +1134,6 @@ export class NetworkService {
           return;
         }
 
-        // Deduplicate initial prompt by transferId
         const reqKey = `req_prompt:${transferId}`;
         if (this.seenCtl.has(reqKey)) return;
         this.seenCtl.add(reqKey);
@@ -1163,7 +1282,6 @@ export class NetworkService {
     const transferId = `xfer_${Math.random().toString(36).slice(2, 10)}`;
     const bundle = this.getOrCreatePeerBundle(peer.id);
 
-    // Ensure WebRTC negotiation is started immediately
     void bundle.peerSession.ensureNegotiationStarted();
 
     if (!bundle.localPublicKey) {
@@ -1244,8 +1362,8 @@ export class NetworkService {
       transferId,
       0,
       {
-        sendDataChannel: async (frame) => {
-          await this.sendDataFrameHybrid(peer.id, bundle, frame, transfer);
+        sendDataChannel: (frame) => {
+          return this.sendDataFrameHybrid(peer.id, bundle, frame, transfer);
         },
         sendCtlMessage: (msg) => {
           this.sendCtlReliable(peer.id, msg as Record<string, any>);
@@ -1308,17 +1426,16 @@ export class NetworkService {
 
     this.sendCtlReliable(peer.id, buildReqPayload());
 
-    // Automatic retry every 2 seconds while in 'waiting' state so Online Room transfers never get stuck!
     let attempts = 0;
     const retryTimer = setInterval(() => {
       attempts++;
       const cur = this.transferFiles.get(transferId);
-      if (!cur || cur.status !== 'waiting' || attempts > 8) {
+      if (!cur || cur.status !== 'waiting' || attempts > 10) {
         this.clearRequestRetry(transferId);
         return;
       }
       this.sendCtlReliable(peer.id, buildReqPayload());
-    }, 2000);
+    }, 1500);
     this.requestRetryTimers.set(transferId, retryTimer);
   }
 
@@ -1333,6 +1450,8 @@ export class NetworkService {
       });
       return;
     }
+
+    void bundle.peerSession.ensureNegotiationStarted();
 
     if (!bundle.localPublicKey) {
       try {
@@ -1418,7 +1537,9 @@ export class NetworkService {
           }
           transfer.speed = transfer.speedBytesPerSec;
           transfer.channel =
-            bundle.peerSession.data.readyState === 'open' ? 'direct' : 'relay';
+            bundle.peerSession.data.readyState === 'open' || this.localBusPeers.has(req.fromId)
+              ? 'direct'
+              : 'relay';
           const remaining = Math.max(0, totalBytes - verifiedBytes);
           transfer.etaSeconds =
             transfer.speedBytesPerSec > 0 ? remaining / transfer.speedBytesPerSec : 0;

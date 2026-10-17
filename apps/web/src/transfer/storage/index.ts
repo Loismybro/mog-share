@@ -260,6 +260,15 @@ export async function createBlockWriter(options: {
   transferId?: string;
   writableStream?: any;
 }): Promise<BlockWriter> {
+  if (options.strategy === 'fsa' && options.writableStream) {
+    return new FSABlockWriter(options.writableStream);
+  }
+
+  // For files <= 250 MB, assemble directly in MemoryBlockWriter for maximum speed and zero OPFS handle lock/expiry issues
+  if (!options.strategy && options.fileSize <= 250 * 1024 * 1024) {
+    return new MemoryBlockWriter(options.mimeType);
+  }
+
   const caps = detectStorageCapabilities();
   let strategy = options.strategy || pickStorageStrategy(options.fileSize).strategy;
 
@@ -267,7 +276,6 @@ export async function createBlockWriter(options: {
     if (options.writableStream) {
       return new FSABlockWriter(options.writableStream);
     }
-    // No writableStream provided (e.g. background/automated receive); fallback to OPFS if available
     strategy = caps.hasOPFS ? 'opfs' : 'memory';
   }
 

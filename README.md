@@ -1,32 +1,27 @@
-# ⚡ MogShare — Cross-Platform P2P Sharing Hub
+# ⚡ MogShare v3.0 — Neural P2P File Sharing Hub
 
-> **Zero-install peer-to-peer file, folder, and snippet sharing across Android, iOS, Windows, macOS, and Linux.**  
-> Powered by WebRTC DataChannels, Dual-Stack LAN/Hotspot & Multi-Tab Auto-Discovery, SHA-256 Block Verification, Persistent Personal Space Vault, and the **Twilight Horizon** (Bright-to-Slight-Dark) Dashboard UI.
+> **Zero-data local Wi-Fi and global encrypted room file sharing across Android, iOS, Windows, macOS, and Linux.**  
+> Powered by WebRTC DataChannels, 3D WebGL **BriarGlobe** Neural Thread Sphere Discovery, **CipherReach** Interactive Glyph Matrix, **MorphingGlyphCloud** Kinetic Typography, and SHA-256 Block-Verified Streaming.
 
 ---
 
 ## ✨ Key Capabilities
 
-### 🛰️ 1. Automatic Device Detection & Multi-Layer Discovery
-* **Smart Hardware & OS Fingerprinting**: Automatically detects device make/model, operating system, browser engine, network link type, local LAN IP, and battery telemetry using User-Agent Client Hints (`navigator.userAgentData`), Network Information API, and Battery Status API.
-* **Instant LAN & Mobile Hotspot Grouping**: Devices connected to the same Wi-Fi router, `/24` subnet, or mobile hotspot automatically appear in the live orbital sonar radar within 1 second.
-* **Zero-Latency Multi-Tab Bus (`BroadcastChannel`)**: Multiple tabs or windows on the same device discover each other and transfer files/messages in `<15ms`—even when offline.
-* **Cross-Network Room Bridge**: 8-character unambiguous room codes (`ABCD2345`) + dynamic QR codes and optional AES-GCM passphrase encryption for sharing across different networks or cellular data.
-* **Interactive Demo Peer Loopback Mode**: 1-click **Simulate Peer** mode spawns a virtual `Galaxy S25 Ultra` peer that runs the real sender/receiver transfer pipeline in loopback so you can test file transfers, progress, vault storage, and live chat on a single device.
+### 🌐 1. Originkit 3D & Kinetic Visual Architecture
+* **BriarGlobe 3D Neural Sphere Radar**: Interactive WebGL 3D neural thread sphere where discovered local Wi-Fi and online room peers appear as live glowing 3D knots. Hover or click any knot in 3D space (or tap its peer card below) to beam files or chat immediately.
+* **CipherReach Interactive Hero & Backdrop**: Two reaching hands rendered in a procedural ASCII/glyph matrix with interactive cursor physics.
+* **MorphingGlyphCloud Kinetic Typography**: Real-time canvas particle glyph cloud that morphs across status phrases with cursor repulsion.
+* **Obsidian Glass Interface**: Deep obsidian (`#07090F`) glassmorphic surfaces with `Space Grotesk`, `Plus Jakarta Sans`, and `JetBrains Mono` telemetry.
 
-### 🚀 2. High-Speed Hybrid P2P + Relay Transfer Engine
-* **True P2P WebRTC DataChannels**: Pre-negotiated binary data channels (`16 KiB` chunks, `4 MiB` SHA-256 verified blocks) with W3C Perfect Negotiation and 2-layer credit flow control.
-* **Automatic Hybrid Relay Fallback**: If strict NAT/firewalls block direct WebRTC, transfers seamlessly switch to E2E Encrypted (ECDH P-256 + AES-256-GCM) or binary base64 relay without failing.
-* **Real-Time Telemetry & Controls**: Live progress bar, smoothed transfer speed (`MB/s`), ETA countdown, **Pause / Resume**, **Cancel**, **Retry**, and **Bundle Multiple Files as ZIP** on the fly.
-* **Stream-to-Disk Storage**: Uses File System Access API (`FSA`), Origin Private File System (`OPFS`), or memory storage with automatic quota verification.
+### 🚀 2. High-Velocity Hybrid P2P + Relay Transfer Engine
+* **Zero-Stall Multi-Transport Streaming**: Automatically selects the fastest path—same-device `BroadcastChannel` memory bus, direct WebRTC `RTCDataChannel` burst mode (`60 KB` chunks, `4 MB` blocks), or instant WebSocket binary relay with seamless mid-flight upgrade to direct WebRTC.
+* **SHA-256 Block Integrity**: Strict contiguous chunk validation and cryptographic SHA-256 block verification ensure zero file corruption for any file type or size.
+* **Hardware-Signature Peer Deduplication**: Server-side (`LocalGroupIndex` & room registries) and client-side hardware fingerprinting immediately evict ghost sessions on reconnect or tab refresh so duplicate devices never accumulate.
 
-### 🗄️ 3. Personal Space Vault & Built-in Media Viewers
-* **Persistent IndexedDB Vault**: Automatically saves received files locally by category (`Photos`, `Videos`, `Music`, `Docs`, `APKs`, `Archives`) with search, sorting, local file import, and batch **Export as ZIP**.
-* **In-App Previewers**: Image lightbox with zoom, audio player with animated equalizer, HTML5 video player, code/text viewer with 1-click copy, PDF viewer, and APK package inspector.
-
-### 💬 4. Live P2P Chat & Shared Clipboard
-* **Broadcast or Direct Peer Messaging**: Send text, clickable links, or code snippets to all connected devices or directly to a single peer.
-* **Auto-Copy Option**: Optional toggle to automatically copy incoming snippets to your system clipboard.
+### 🛰️ 3. Local Wi-Fi Mesh & 6-Digit Global Rooms
+* **Zero-Data Local Mesh**: Automatically discovers devices sharing the same Wi-Fi router, LAN subnet, or mobile hotspot.
+* **6-Character Encrypted Room Bridge**: Connect devices across different networks or cellular data using a 6-digit room code or instant QR code (`?room=CODE`).
+* **Personal Space Vault**: Pin frequently shared or received files in IndexedDB for 1-click staging and beaming.
 
 ---
 
@@ -35,47 +30,20 @@
 ```text
 mog-share/
 ├── apps/
-│   ├── signaling/          # Express + WebSocket/SSE/Long-Poll signaling & TURN credential server
-│   └── web/                # React 19 + TypeScript + Vite + Tailwind CSS dashboard client
+│   ├── signaling/          # Express + WebSocket signaling, LAN grouping, room bridge & ZIP export
+│   └── web/                # React 19 + TypeScript + Vite + Tailwind CSS + WebGL 3D client
 ├── packages/
-│   └── shared/             # Shared binary protocol framing, constants, and crypto utilities
-├── tests/                  # Vitest unit & integration test suites
+│   └── shared/             # Shared binary protocol framing, constants, and SHA-256 utilities
+├── render.yaml             # Render.com 1-click production blueprint
 ├── Dockerfile              # Unified single-container production build
-└── docker-compose.yml      # Self-hosted stack with optional coturn TURN server
+└── docker-compose.yml      # Self-hosted stack
 ```
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Deployment (Render / Docker / Node)
 
-### 1. Install Dependencies
-```bash
-npm install
-```
-
-### 2. Run in Development Mode
-Starts both the signaling server (`http://localhost:4000`) and Vite web client (`http://localhost:5173`) concurrently:
-```bash
-npm run dev
-```
-* Open `http://localhost:5173` in your browser.
-* To pair a phone on the same Wi-Fi, click **Connect Phone / PC** in the sidebar and scan the QR code (or open `http://<your-lan-ip>:5173`).
-* To test on a single machine immediately, click **Simulate Peer (Test)** in the sidebar or open a second browser tab!
-
-### 3. Build & Run for Production
-```bash
-npm run build
-npm start
-```
-Serves both the compiled web dashboard and the WebSocket signaling server on a single port (`PORT=4000` by default).
-
-### 4. Run Automated Tests
-```bash
-npm test
-```
-
----
-
-## 📄 License
-
-MIT
+This repository is pre-configured for **Render** via `render.yaml`:
+- **Build Command**: `npm install --include=dev && npm run build`
+- **Start Command**: `npm start`
+- Serves both the compiled production web app (`apps/web/dist`) and the WebSocket signaling server (`/ws`, `/api/*`) on Render's injected `PORT`.

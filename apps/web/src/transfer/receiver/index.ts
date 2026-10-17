@@ -177,8 +177,13 @@ export class FileReceiverPipeline {
 
     let totalReceived = 0;
     const sortedIndices = Array.from(chunksMap.keys()).sort((a, b) => a - b);
-    for (const idx of sortedIndices) {
-      totalReceived += chunksMap.get(idx)!.byteLength;
+
+    // Ensure contiguous chunk sequence 0 .. N-1 with no gaps
+    for (let i = 0; i < sortedIndices.length; i++) {
+      if (sortedIndices[i] !== i) {
+        return;
+      }
+      totalReceived += chunksMap.get(i)!.byteLength;
     }
 
     if (totalReceived < endMeta.byteLength) {
@@ -186,6 +191,18 @@ export class FileReceiverPipeline {
     }
 
     this.clearStallTimer(blockIndex);
+
+    if (totalReceived !== endMeta.byteLength) {
+      // Corrupted or mismatched chunk sizing — request clean block retry
+      this.blockChunks.delete(blockIndex);
+      this.blockReceivedBytes.delete(blockIndex);
+      this.blockEndPayloads.delete(blockIndex);
+      this.callbacks.sendCtlMessage({
+        type: 'block-retry',
+        payload: { transferId: this.transferId, blockIndex },
+      });
+      return;
+    }
 
     const assembledBlock = new Uint8Array(endMeta.byteLength);
     let offset = 0;

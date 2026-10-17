@@ -1,218 +1,135 @@
-import { useState, useEffect } from 'react';
-import QRCode from 'qrcode';
+import React from 'react';
 import {
-  ArrowDownLeft,
-  Wifi,
-  HardDrive,
-  Copy,
+  FileText,
+  Image as ImageIcon,
+  Film,
+  Music,
+  Archive,
   Check,
   X,
-  Share2,
+  ShieldCheck,
   Sparkles,
+  Laptop,
+  Smartphone,
 } from 'lucide-react';
+import type { IncomingRequest } from '../types';
 
-export function ReceiveModal(props: {
-  onClose: () => void;
-  deviceName: string;
-  roomCode: string | null;
-  publicUrl: string;
-  autoAcceptNearby: boolean;
-  onToggleAutoAccept: () => void;
-  onGoVault: () => void;
-  buildRoomLink: (code: string) => Promise<string>;
-  pushToast: (kind: 'success' | 'error' | 'info', msg: string) => void;
-}) {
-  const [qrUrl, setQrUrl] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [link, setLink] = useState('');
+interface ReceiveModalProps {
+  request: IncomingRequest | null;
+  onAccept: () => void;
+  onDecline: () => void;
+}
 
-  useEffect(() => {
-    let active = true;
-    const resolveTargetUrl = async () => {
-      if (props.roomCode) {
-        return props.buildRoomLink(props.roomCode);
-      }
-      if (props.publicUrl.trim()) {
-        return props.publicUrl.trim();
-      }
-      if (typeof window !== 'undefined') {
-        const host = window.location.hostname;
-        if (host === 'localhost' || host === '127.0.0.1') {
-          try {
-            const res = await fetch('/api/info');
-            const info = await res.json();
-            const lan = info?.lanAddresses?.[0];
-            if (lan) {
-              return `${window.location.protocol}//${lan}:${window.location.port || '4000'}`;
-            }
-          } catch {
-            /* fallback */
-          }
-        }
-        return window.location.origin;
-      }
-      return '';
-    };
+export const ReceiveModal: React.FC<ReceiveModalProps> = ({
+  request,
+  onAccept,
+  onDecline,
+}) => {
+  if (!request) return null;
 
-    resolveTargetUrl().then((l) => {
-      if (!active) return;
-      setLink(l);
-      if (l) {
-        QRCode.toDataURL(l, {
-          width: 220,
-          margin: 1,
-          color: { dark: '#0f172a', light: '#ffffff' },
-        })
-          .then((url) => {
-            if (active) setQrUrl(url);
-          })
-          .catch(() => {
-            if (active) setQrUrl(null);
-          });
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [props.roomCode, props.publicUrl, props.buildRoomLink]);
-
-  const handleCopyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(link || props.roomCode || '');
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      props.pushToast('success', 'Link copied to clipboard');
-    } catch {
-      props.pushToast('error', 'Failed to copy link');
-    }
+  const formatSize = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const getFileIcon = (type: string, name: string) => {
+    if (type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-sky-400" />;
+    if (type.startsWith('video/')) return <Film className="w-4 h-4 text-indigo-400" />;
+    if (type.startsWith('audio/')) return <Music className="w-4 h-4 text-emerald-400" />;
+    if (name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z') || name.endsWith('.tar.gz')) {
+      return <Archive className="w-4 h-4 text-amber-400" />;
+    }
+    return <FileText className="w-4 h-4 text-slate-300" />;
+  };
+
+  const isMobile =
+    request.from.platform === 'Android' || request.from.platform === 'iOS';
+
   return (
-    <div className="modal-overlay" onClick={props.onClose}>
-      <div
-        className="modal receive-mode-modal"
-        role="dialog"
-        aria-label="Receive Files"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-head">
-          <div className="flex items-center gap-2">
-            <span className="badge badge-emerald">Listening</span>
-            <h2>Ready to Receive Files</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fadeIn">
+      <div className="relative w-full max-w-md rounded-2xl mog-glass border border-white/15 p-6 shadow-2xl overflow-hidden">
+        {/* Ambient top glow */}
+        <div
+          className="absolute -top-24 left-1/2 -translate-x-1/2 w-72 h-36 pointer-events-none"
+          style={{
+            background:
+              'radial-gradient(circle, rgba(56,189,248,0.28) 0%, rgba(99,102,241,0.08) 60%, transparent 100%)',
+          }}
+        />
+
+        {/* Header */}
+        <div className="relative flex items-center gap-3.5 mb-5">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-sky-400/20 to-indigo-500/20 border border-sky-400/35 flex items-center justify-center text-sky-300 shrink-0">
+            {isMobile ? <Smartphone className="w-6 h-6" /> : <Laptop className="w-6 h-6" />}
           </div>
-          <button className="icon-btn" onClick={props.onClose} aria-label="Close">
-            <X size={18} />
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-sky-400 font-semibold">
+              <Sparkles className="w-3 h-3" />
+              <span>Incoming P2P Beam</span>
+            </div>
+            <h3 className="text-lg font-bold text-white truncate">
+              {request.from.name}
+            </h3>
+            <p className="text-xs text-slate-400">
+              {request.from.platform} • {request.files.length}{' '}
+              {request.files.length === 1 ? 'file' : 'files'} ({formatSize(request.totalSize)})
+            </p>
+          </div>
+        </div>
+
+        {/* File list */}
+        <div className="max-h-52 overflow-y-auto space-y-2 mb-5 pr-1">
+          {request.files.map((file, idx) => (
+            <div
+              key={`${file.name}-${idx}`}
+              className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.04] border border-white/8"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
+                  {getFileIcon(file.type, file.name)}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-100 truncate">
+                    {file.name}
+                  </p>
+                  <p className="text-[11px] font-mono text-slate-400">
+                    {formatSize(file.size)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Security footer badge */}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 mb-5">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>SHA-256 block-verified transfer • Direct encrypted stream</span>
+        </div>
+
+        {/* Actions */}
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onDecline}
+            className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl mog-btn-secondary text-xs font-bold text-slate-300 hover:text-rose-300 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+            <span>Decline</span>
           </button>
-        </div>
-
-        <div className="receive-mode-body">
-          <div className="receive-beacon-card">
-            <div className="receive-beacon-sonar">
-              <div className="beacon-ring ring-a" />
-              <div className="beacon-ring ring-b" />
-              <div className="beacon-ring ring-c" />
-              <div className="beacon-avatar">
-                <ArrowDownLeft size={24} />
-              </div>
-            </div>
-            <div className="receive-beacon-info">
-              <h3 className="beacon-title">{props.deviceName}</h3>
-              <p className="beacon-desc">
-                Visible to nearby devices on your Wi-Fi, Hotspot, or active Online Room
-              </p>
-              <div className="beacon-status-pill">
-                <span className="beacon-dot" />
-                <span>Waiting for incoming files…</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="receive-connect-card">
-            <div className="receive-qr-left">
-              {qrUrl ? (
-                <img
-                  src={qrUrl}
-                  alt="QR code to connect and send files"
-                  className="receive-qr-img"
-                  width={144}
-                  height={144}
-                />
-              ) : (
-                <div className="receive-qr-placeholder small muted">Generating QR…</div>
-              )}
-            </div>
-
-            <div className="receive-connect-details">
-              <h4 className="font-bold text-sm">Scan QR Code from Sender Device</h4>
-              <p className="small muted">
-                Point the other phone or tablet's camera at this QR code, or open this address:
-              </p>
-              <div className="receive-pin-box mono">
-                {props.roomCode ? `Room Code: ${props.roomCode}` : link || 'Same Wi-Fi / Hotspot'}
-              </div>
-
-              <div className="receive-connect-btns">
-                {link && (
-                  <button className="btn btn-sm btn-secondary" onClick={handleCopyLink}>
-                    {copied ? (
-                      <>
-                        <Check size={14} /> Copied
-                      </>
-                    ) : (
-                      <>
-                        <Copy size={14} /> Copy Link
-                      </>
-                    )}
-                  </button>
-                )}
-                {typeof navigator.share === 'function' && link && (
-                  <button
-                    className="btn btn-sm btn-secondary"
-                    onClick={() =>
-                      navigator.share({ title: 'Send files to me on MogShare', url: link }).catch(() => {})
-                    }
-                  >
-                    <Share2 size={14} /> Share Link
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="receive-settings-row">
-            <button
-              className={`btn btn-sm flex-1 ${props.autoAcceptNearby ? 'btn-emerald' : 'btn-secondary'}`}
-              onClick={props.onToggleAutoAccept}
-            >
-              <Sparkles size={14} />
-              {props.autoAcceptNearby
-                ? 'Auto-Accept: ON (Save automatically)'
-                : 'Auto-Accept: OFF (Ask before receiving)'}
-            </button>
-            <button
-              className="btn btn-sm btn-secondary"
-              onClick={() => {
-                props.onClose();
-                props.onGoVault();
-              }}
-            >
-              <HardDrive size={14} /> Saved Files
-            </button>
-          </div>
-
-          <p className="small muted center">
-            <Wifi size={13} style={{ display: 'inline', marginRight: 5 }} />
-            Local Wi-Fi transfers happen directly between your devices and use <strong>0 MB</strong> of internet data.
-          </p>
-        </div>
-
-        <div className="modal-actions">
-          <button className="btn btn-primary" onClick={props.onClose}>
-            Done
+          <button
+            type="button"
+            onClick={onAccept}
+            className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl mog-btn-primary text-xs font-bold cursor-pointer"
+          >
+            <Check className="w-4 h-4" />
+            <span>Accept & Save</span>
           </button>
         </div>
       </div>
     </div>
   );
-}
+};

@@ -65,7 +65,7 @@ export function decodeBinaryFrame(data: ArrayBuffer | Uint8Array): {
     chunkIndex: view.getUint32(13, false),
   };
 
-  const payload = bytes.subarray(BINARY_HEADER_SIZE);
+  const payload = bytes.slice(BINARY_HEADER_SIZE);
   return { header, payload };
 }
 

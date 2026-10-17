@@ -136,14 +136,22 @@ export class PeerSession {
     if (
       this.closed ||
       this.makingOffer ||
-      this.pc.signalingState !== 'stable' ||
-      this.pc.localDescription ||
       this.dataChannel.readyState === 'open'
     ) {
       return;
     }
+    if (this.pc.signalingState !== 'stable') {
+      return;
+    }
     try {
       this.makingOffer = true;
+      if (this.pc.localDescription && this.pc.connectionState !== 'connected' && this.pc.connectionState !== 'connecting') {
+        try {
+          this.pc.restartIce();
+        } catch {
+          /* ignore */
+        }
+      }
       if (typeof this.pc.createOffer === 'function') {
         const offer = await this.pc.createOffer();
         if (this.pc.signalingState !== 'stable') return;
