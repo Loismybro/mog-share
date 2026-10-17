@@ -10,8 +10,10 @@ import type {
 import {
   DEFAULT_CHUNK_SIZE,
   DEFAULT_BLOCK_SIZE,
+  BUFFERED_AMOUNT_HIGH_WATERMARK,
   ROOM_CODE_LENGTH,
   ROOM_CODE_ALPHABET,
+  decodeBinaryFrame,
   type SignalingEnvelope,
   type IceServerConfig,
 } from '@shareapp/shared';
@@ -188,6 +190,8 @@ export class NetworkService {
 
   private activeSenders = new Map<string, FileSenderPipeline>();
   private activeReceivers = new Map<string, FileReceiverPipeline>();
+  private activeReceiversByNum = new Map<number, FileReceiverPipeline>();
+  private earlyFramesByTransferNum = new Map<number, Uint8Array[]>();
   private activeWriters = new Map<string, BlockWriter>();
   private transferFiles = new Map<string, TransferFile>();
   private transferBitmaps = new Map<string, BlockBitmap>();
@@ -321,13 +325,16 @@ export class NetworkService {
   private enqueueOrAutoAcceptIncomingRequest(req: IncomingRequest) {
     const autoAcceptUntil = this.autoAcceptPeers.get(req.fromId) || 0;
     const hasActiveReceiveFromPeer = Array.from(this.transferFiles.values()).some(
-      (t) => t.peerId === req.fromId && t.direction === 'receiving' && t.status === 'transferring'
+      (t) =>
+        t.peerId === req.fromId &&
+        t.direction === 'receiving' &&
+        (t.status === 'transferring' || t.status === 'queued')
     );
 
     if (Date.now() < autoAcceptUntil || hasActiveReceiveFromPeer) {
       // Auto-accept subsequent files in a multi-file batch from the same peer!
-      this.autoAcceptPeers.set(req.fromId, Date.now() + 120_000);
-      void this.respondToRequest(req, true);
+      this.autoAcceptPeers.set(req.fromId, Date.now() + 180_000);
+      void this.respondToRequest(req, true, hasActiveReceiveFromPeer);
       return;
     }
 
@@ -413,8 +420,10 @@ export class NetworkService {
   }
 
   /**
-   * Sends multiple files (and large files) reliably both locally and online.
-   * Pre-warms turbo relay lanes & WebRTC channels and coordinates batch streaming.
+   * LocalSend-inspired Batch Session Preparation (`prepare-upload`):
+   * Registers all selected files into a unified batch session (`sessionId`),
+   * marks File 1 as waiting for approval and Files 2..N as queued sequentially,
+   * and dispatches a unified batch manifest so multi-file transfers never contend or stall.
    */
   public async sendFiles(peerId: string, files: File[]): Promise<void> {
     if (!files || files.length === 0) return;
@@ -422,11 +431,53 @@ export class NetworkService {
       this.getPeers().find((p) => p.id === peerId) ||
       ({ id: peerId, name: 'Connected Peer', platform: 'web', status: 'online' } as Device);
 
-    // Pre-warm parallel binary WebSocket turbo lanes for instant multi-route backup
+    const bundle = this.getOrCreatePeerBundle(peer.id);
+    void bundle.peerSession.ensureNegotiationStarted();
     this.signaling?.ensureTurboLanes(2);
 
+    const sessionId = `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const batchTotal = files.length;
+
+    const batchManifest: Array<{
+      transferId: string;
+      fileIndex: number;
+      meta: FileMeta;
+    }> = [];
+
     for (let i = 0; i < files.length; i++) {
-      await this.sendFile(peer, files[i], i);
+      const transferId = await this.sendFile(peer, files[i], i, {
+        sessionId,
+        batchIndex: i + 1,
+        batchTotal,
+        suppressIndividualRetry: files.length > 1 && i > 0,
+      });
+      batchManifest.push({
+        transferId,
+        fileIndex: i,
+        meta: {
+          transferId,
+          fileIndex: i,
+          name: files[i].name,
+          size: files[i].size,
+          type: files[i].type || 'application/octet-stream',
+          lastModified: files[i].lastModified,
+        },
+      });
+    }
+
+    if (files.length > 1) {
+      const buildBatchPayload = () => ({
+        type: 'prepare-upload',
+        payload: {
+          sessionId,
+          senderName: this.deviceName,
+          senderPlatform: this.platform,
+          senderModel: this.deviceProfile?.model,
+          senderPubKey: bundle.localPublicKey,
+          files: batchManifest,
+        },
+      });
+      this.sendCtlReliable(peer.id, buildBatchPayload());
     }
   }
 
@@ -445,12 +496,15 @@ export class NetworkService {
     this.pendingIncomingReq = null;
 
     for (const req of batch) {
-      this.autoAcceptPeers.set(req.fromId, Date.now() + 120_000);
+      this.autoAcceptPeers.set(req.fromId, Date.now() + 180_000);
     }
     this.notifySubscribers();
 
-    for (const req of batch) {
-      await this.respondToRequest(req, true);
+    // Pre-initialize all receivers in the batch sequentially so File 1 is ready immediately
+    // and Files 2..N are pre-registered in queued state before File 1 finishes!
+    for (let i = 0; i < batch.length; i++) {
+      const isQueued = i > 0;
+      await this.respondToRequest(batch[i], true, isQueued);
     }
   }
 
@@ -1361,11 +1415,11 @@ export class NetworkService {
   }
 
   /**
-   * Zap-Speed Multi-Route Hybrid Transport:
-   * - Route 1: 4x Parallel Unordered WebRTC DataChannels (with automatic spillover to Turbo Relay if buffer > 2.5 MiB!)
+   * Strict P2P First Transport Router (LocalSend & WebRTC Optimized):
    * - Route 2: Same-Browser BroadcastChannel zero-copy binary bus
-   * - Route 3: Multi-Lane Binary WebSocket Turbo Pool (/ws?turbo=1..2)
-   * - Route 4: HTTP Binary Burst (/api/turbo-relay)
+   * - Route 1: Strict P2P over 4x Parallel WebRTC DataChannels (with native bufferedAmountLow backpressure;
+   *   NEVER spills over to the cloud WebSocket relay when a direct P2P DataChannel is open!)
+   * - Route 3: Binary WebSocket Relay (used ONLY if P2P DataChannel is not open)
    */
   private sendDataFrameHybrid(
     remoteDeviceId: string,
@@ -1391,33 +1445,30 @@ export class NetworkService {
       }
     }
 
-    // Route 1: 4x Parallel WebRTC DataChannels
+    // Route 1: Strict P2P First over 4x Parallel WebRTC DataChannels
+    // When P2P is open, 100% of frames stay on the local hardware link and pace via native bufferedAmountLow!
     if (ps.isAnyDataOpen()) {
-      const rtcBuf = ps.getBufferedAmount();
-      if (rtcBuf < 2.5 * 1024 * 1024) {
-        transfer.channel = 'direct';
-        try {
-          ps.sendData(frame);
-          return;
-        } catch {
-          /* spillover to Turbo Relay below */
+      transfer.channel = 'direct';
+      try {
+        ps.sendData(frame);
+        if (ps.getBufferedAmount() >= BUFFERED_AMOUNT_HIGH_WATERMARK) {
+          return ps.waitForBufferedAmountLow();
         }
-      } else if (this.signaling) {
-        // Multi-Route Zap Spillover: WebRTC pipe is full, stripe excess frame over Binary Turbo Relay simultaneously!
-        this.signaling.sendBinaryRelay(remoteDeviceId, frame);
         return;
+      } catch {
+        // Only fall through if all DataChannels closed mid-send
       }
     }
 
-    // Kick WebRTC negotiation in background so it can join the multi-route pool as soon as ICE completes
+    // Kick WebRTC negotiation in background so P2P can take over as soon as ICE completes
     void ps.ensureNegotiationStarted();
 
-    // Route 3 + Route 4: Multi-Lane Binary WebSocket Turbo Pool + HTTP Binary Burst Backup
+    // Route 3: Binary WebSocket Relay Fallback (ONLY when direct P2P DataChannel is not open)
     transfer.channel = 'relay';
     if (this.signaling) {
       this.signaling.sendBinaryRelay(remoteDeviceId, frame);
-      if (this.signaling.getRelayBufferedAmount() > 3 * 1024 * 1024) {
-        return this.signaling.waitForRelayDrain(1.5 * 1024 * 1024);
+      if (this.signaling.getRelayBufferedAmount() >= 2 * 1024 * 1024) {
+        return this.signaling.waitForRelayDrain(1024 * 1024);
       }
     }
   }
@@ -1432,7 +1483,7 @@ export class NetworkService {
 
   /**
    * Coordinates active sender pipelines per peer so multi-file & large-file batches
-   * stream at maximum speed without starving each other's block ACKs.
+   * stream sequentially 1-by-1 at maximum link speed with zero contention.
    */
   private enqueueAcceptedSender(remoteDeviceId: string, transferId: string) {
     let queue = this.acceptedSendQueue.get(remoteDeviceId);
@@ -1440,8 +1491,18 @@ export class NetworkService {
       queue = [];
       this.acceptedSendQueue.set(remoteDeviceId, queue);
     }
-    if (!queue.includes(transferId)) {
+    const running = this.runningSendersPerPeer.get(remoteDeviceId);
+    const isAlreadyRunning = running ? running.has(transferId) : false;
+    if (!queue.includes(transferId) && !isAlreadyRunning) {
       queue.push(transferId);
+      // If another file is currently streaming to this peer, mark this accepted file as 'queued'
+      if (running && running.size >= 1) {
+        const tf = this.transferFiles.get(transferId);
+        if (tf && tf.status !== 'completed') {
+          tf.status = 'queued';
+          this.callbacks.onTransferUpdate({ ...tf });
+        }
+      }
     }
     this.pumpAcceptedSenders(remoteDeviceId);
   }
@@ -1466,7 +1527,21 @@ export class NetworkService {
         this.callbacks.onTransferUpdate({ ...nextTf });
       }
       soundEffects.play('transferStart');
-      void sender.start();
+
+      const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
+      // Give WebRTC DataChannel a brief fast-open window on LAN/Hotspot before streaming
+      if (
+        !bundle.peerSession.isAnyDataOpen() &&
+        !this.localBusPeers.has(remoteDeviceId) &&
+        bundle.peerSession.connectionState !== 'failed'
+      ) {
+        void bundle.peerSession.ensureNegotiationStarted();
+        void bundle.peerSession.whenDataOpen(450).then(() => {
+          void sender.start();
+        });
+      } else {
+        void sender.start();
+      }
     }
   }
 
@@ -1495,6 +1570,67 @@ export class NetworkService {
     }
 
     switch (type) {
+      case 'prepare-upload': {
+        const sessionId = payload.sessionId as string | undefined;
+        const files = (payload.files as Array<{ transferId: string; fileIndex?: number; meta: FileMeta }>) || [];
+        if (files.length === 0) return;
+
+        const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
+        void bundle.peerSession.ensureNegotiationStarted();
+
+        if (payload.senderPubKey) {
+          bundle.trustManager
+            .deriveSharedKey(payload.senderPubKey as string)
+            .then(() => {
+              bundle.hasDerivedSharedKey = true;
+            })
+            .catch(() => undefined);
+        }
+
+        let addedAny = false;
+        for (const item of files) {
+          const transferId = item.transferId;
+          if (!transferId) continue;
+
+          if (this.activeReceivers.has(transferId)) {
+            this.sendCtlReliable(remoteDeviceId, {
+              type: 'accept-transfer',
+              payload: {
+                transferId,
+                receiverPubKey: bundle.localPublicKey,
+              },
+            });
+            continue;
+          }
+
+          const reqKey = `req_prompt:${transferId}`;
+          if (this.seenCtl.has(reqKey)) continue;
+          this.seenCtl.add(reqKey);
+
+          const req: IncomingRequest = {
+            id: transferId,
+            transferId,
+            sessionId,
+            fromId: remoteDeviceId,
+            fromName: (payload.senderName as string) || 'Nearby Device',
+            fromPlatform: (payload.senderPlatform as Platform) || 'web',
+            fromModel: payload.senderModel as string | undefined,
+            meta: item.meta,
+            senderPubKey: payload.senderPubKey,
+            receivedAt: Date.now(),
+          };
+          this.enqueueOrAutoAcceptIncomingRequest(req);
+          addedAny = true;
+        }
+
+        if (addedAny && this.pendingIncomingReq) {
+          haptics.play('incomingRequest');
+          soundEffects.play('incomingRequest');
+          this.callbacks.onIncomingRequest(this.pendingIncomingReq);
+        }
+        break;
+      }
+
       case 'request-transfer': {
         const transferId = payload.transferId as string;
         const bundle = this.getOrCreatePeerBundle(remoteDeviceId);
@@ -1526,6 +1662,7 @@ export class NetworkService {
         const req: IncomingRequest = {
           id: transferId,
           transferId,
+          sessionId: payload.sessionId as string | undefined,
           fromId: remoteDeviceId,
           fromName: (payload.senderName as string) || 'Nearby Device',
           fromPlatform: (payload.senderPlatform as Platform) || 'web',
@@ -1563,11 +1700,6 @@ export class NetworkService {
         }
         const sender = this.activeSenders.get(transferId);
         if (sender) {
-          const t = this.transferFiles.get(transferId);
-          if (t) {
-            t.status = 'transferring';
-            this.callbacks.onTransferUpdate({ ...t });
-          }
           this.enqueueAcceptedSender(remoteDeviceId, transferId);
         }
         break;
@@ -1645,16 +1777,53 @@ export class NetworkService {
     }
   }
 
+  /**
+   * O(1) Binary Frame Dispatcher with Early Frame Replay Buffer:
+   * Decodes the 14-byte header once and routes directly to the matching FileReceiverPipeline.
+   * If a frame arrives for File 2..N while its BlockWriter is still initializing, buffers up to
+   * 512 frames in RAM and replays them as soon as the receiver pipeline registers.
+   */
   private handleDataFrame(rawFrame: Uint8Array) {
-    for (const receiver of this.activeReceivers.values()) {
-      receiver.handleDataFrame(rawFrame);
+    let decoded: ReturnType<typeof decodeBinaryFrame>;
+    try {
+      decoded = decodeBinaryFrame(rawFrame);
+    } catch {
+      return;
+    }
+
+    const receiver = this.activeReceiversByNum.get(decoded.header.transferIdNum);
+    if (receiver) {
+      receiver.handleDecodedDataFrame(decoded.header, decoded.payload);
+      return;
+    }
+
+    // Buffer early frames if File 2..N starts streaming while its BlockWriter is still being created
+    let earlyBuf = this.earlyFramesByTransferNum.get(decoded.header.transferIdNum);
+    if (!earlyBuf) {
+      earlyBuf = [];
+      this.earlyFramesByTransferNum.set(decoded.header.transferIdNum, earlyBuf);
+    }
+    if (earlyBuf.length < 512) {
+      const copy = new Uint8Array(rawFrame.byteLength);
+      copy.set(rawFrame);
+      earlyBuf.push(copy);
     }
   }
 
   // -------------------------------------------------------------------------
   // Public Transfer APIs
   // -------------------------------------------------------------------------
-  public async sendFile(peer: Device, file: File, fileIndex = 0): Promise<void> {
+  public async sendFile(
+    peer: Device,
+    file: File,
+    fileIndex = 0,
+    batchOptions?: {
+      sessionId?: string;
+      batchIndex?: number;
+      batchTotal?: number;
+      suppressIndividualRetry?: boolean;
+    }
+  ): Promise<string> {
     const transferId = `xfer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const bundle = this.getOrCreatePeerBundle(peer.id);
 
@@ -1688,6 +1857,8 @@ export class NetworkService {
       blobUrl = URL.createObjectURL(file);
     } catch {}
 
+    const initialStatus = fileIndex > 0 ? 'queued' : 'waiting';
+
     const transfer: TransferFile = {
       id: transferId,
       name: file.name,
@@ -1700,12 +1871,15 @@ export class NetworkService {
       speed: 0,
       etaSeconds: 0,
       direction: 'sending',
-      status: 'waiting',
+      status: initialStatus,
       bytesTransferred: 0,
       peerId: peer.id,
       peerName: peer.name,
       channel: 'direct',
       createdAt: Date.now() + fileIndex,
+      sessionId: batchOptions?.sessionId,
+      batchIndex: batchOptions?.batchIndex,
+      batchTotal: batchOptions?.batchTotal,
     };
     this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate({ ...transfer });
@@ -1797,11 +1971,14 @@ export class NetworkService {
       type: 'request-transfer',
       payload: {
         transferId,
+        sessionId: batchOptions?.sessionId,
         senderName: this.deviceName,
         senderPlatform: this.platform,
         senderModel: this.deviceProfile?.model,
         senderPubKey: bundle.localPublicKey,
         meta: {
+          transferId,
+          fileIndex,
           name: file.name,
           size: file.size,
           type: file.type || 'application/octet-stream',
@@ -1815,20 +1992,28 @@ export class NetworkService {
 
     this.sendCtlReliable(peer.id, buildReqPayload());
 
-    let attempts = 0;
-    const retryTimer = setInterval(() => {
-      attempts++;
-      const cur = this.transferFiles.get(transferId);
-      if (!cur || cur.status !== 'waiting' || attempts > 20) {
-        this.clearRequestRetry(transferId);
-        return;
-      }
-      this.sendCtlReliable(peer.id, buildReqPayload());
-    }, 1500);
-    this.requestRetryTimers.set(transferId, retryTimer);
+    if (!batchOptions?.suppressIndividualRetry) {
+      let attempts = 0;
+      const retryTimer = setInterval(() => {
+        attempts++;
+        const cur = this.transferFiles.get(transferId);
+        if (!cur || (cur.status !== 'waiting' && cur.status !== 'queued') || attempts > 30) {
+          this.clearRequestRetry(transferId);
+          return;
+        }
+        this.sendCtlReliable(peer.id, buildReqPayload());
+      }, 1500);
+      this.requestRetryTimers.set(transferId, retryTimer);
+    }
+
+    return transferId;
   }
 
-  public async respondToRequest(req: IncomingRequest, accept: boolean): Promise<void> {
+  public async respondToRequest(
+    req: IncomingRequest,
+    accept: boolean,
+    isQueuedInBatch = false
+  ): Promise<void> {
     const bundle = this.getOrCreatePeerBundle(req.fromId);
     const transferId = req.transferId || req.id || '';
 
@@ -1883,13 +2068,14 @@ export class NetworkService {
       speedBytesPerSec: 0,
       etaSeconds: 0,
       direction: 'receiving',
-      status: 'transferring',
+      status: isQueuedInBatch ? 'queued' : 'transferring',
       bytesTransferred: 0,
       speed: 0,
       peerId: req.fromId,
       peerName: req.fromName,
       channel: isDirect ? 'direct' : 'relay',
-      createdAt: Date.now(),
+      createdAt: Date.now() + (req.meta.fileIndex || 0),
+      sessionId: req.sessionId,
     };
     this.transferFiles.set(transferId, transfer);
     this.callbacks.onTransferUpdate({ ...transfer });
@@ -1898,8 +2084,10 @@ export class NetworkService {
     const bitmap = new BlockBitmap(totalBlocks);
     this.transferBitmaps.set(transferId, bitmap);
 
-    const receiveStartTime = Date.now();
-    let lastSampleTime = receiveStartTime;
+    // Reset start timer upon receiving the first actual data chunk so queued files in a batch
+    // always calculate their true instantaneous transfer speed and ETA!
+    let receiveStartTime = 0;
+    let lastSampleTime = 0;
     let lastSampleBytes = 0;
 
     const receiverPipeline = new FileReceiverPipeline(
@@ -1912,12 +2100,16 @@ export class NetworkService {
         },
         onProgress: (verifiedBytes, totalBytes) => {
           const now = Date.now();
+          if (receiveStartTime === 0) {
+            receiveStartTime = now;
+            lastSampleTime = now;
+          }
           const dt = (now - lastSampleTime) / 1000;
-          if (dt >= 0.2) {
+          if (dt >= 0.18) {
             const instSpeed = (verifiedBytes - lastSampleBytes) / dt;
             transfer.speedBytesPerSec =
               transfer.speedBytesPerSec > 0
-                ? transfer.speedBytesPerSec * 0.65 + instSpeed * 0.35
+                ? transfer.speedBytesPerSec * 0.6 + instSpeed * 0.4
                 : instSpeed;
             lastSampleTime = now;
             lastSampleBytes = verifiedBytes;
@@ -1964,7 +2156,6 @@ export class NetworkService {
             transfer.fileBlob = output;
             try {
               transfer.blobUrl = URL.createObjectURL(output);
-              // Automatically save completed file to device downloads
               if (typeof document !== 'undefined' && transfer.blobUrl) {
                 const a = document.createElement('a');
                 a.href = transfer.blobUrl;
@@ -1984,6 +2175,8 @@ export class NetworkService {
           haptics.play('complete');
           soundEffects.play('transferComplete');
           this.activeReceivers.delete(transferId);
+          this.activeReceiversByNum.delete(receiverPipeline.getTransferIdNum());
+          this.earlyFramesByTransferNum.delete(receiverPipeline.getTransferIdNum());
           this.activeWriters.delete(transferId);
         },
         onError: (err) => {
@@ -1993,14 +2186,30 @@ export class NetworkService {
           haptics.play('error');
           soundEffects.play('error');
           this.activeReceivers.delete(transferId);
+          this.activeReceiversByNum.delete(receiverPipeline.getTransferIdNum());
+          this.earlyFramesByTransferNum.delete(receiverPipeline.getTransferIdNum());
           this.activeWriters.delete(transferId);
         },
       },
       DEFAULT_BLOCK_SIZE
     );
 
+    const tNum = receiverPipeline.getTransferIdNum();
     this.activeReceivers.set(transferId, receiverPipeline);
-    soundEffects.play('transferStart');
+    this.activeReceiversByNum.set(tNum, receiverPipeline);
+
+    // Replay any early frames that arrived while BlockWriter was initializing
+    const earlyFrames = this.earlyFramesByTransferNum.get(tNum);
+    if (earlyFrames && earlyFrames.length > 0) {
+      this.earlyFramesByTransferNum.delete(tNum);
+      for (const ef of earlyFrames) {
+        receiverPipeline.handleDataFrame(ef);
+      }
+    }
+
+    if (!isQueuedInBatch) {
+      soundEffects.play('transferStart');
+    }
 
     this.sendCtlReliable(req.fromId, {
       type: 'accept-transfer',
@@ -2015,6 +2224,12 @@ export class NetworkService {
     this.clearRequestRetry(id);
     const sender = this.activeSenders.get(id);
     if (sender) sender.cancel();
+
+    const receiver = this.activeReceivers.get(id);
+    if (receiver) {
+      this.activeReceiversByNum.delete(receiver.getTransferIdNum());
+      this.earlyFramesByTransferNum.delete(receiver.getTransferIdNum());
+    }
 
     const writer = this.activeWriters.get(id);
     if (writer) void writer.abort();

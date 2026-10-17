@@ -182,8 +182,8 @@ export class SignalingLadderClient {
 
   /**
    * Packs [0x4D, 0x47, targetIdLen, ...targetIdBytes, ...rawFrame]
-   * and routes across parallel Binary WebSocket lanes + HTTP Binary Burst backup route!
-   * Automatically falls back to JSON relay-frame if the remote server does not advertise binaryRelay.
+   * and routes across parallel Binary WebSocket lanes cleanly with TCP backpressure.
+   * Only falls back to HTTP /api/turbo-relay when no WebSocket lane is open.
    */
   public sendBinaryRelay(toDeviceId: string, frame: Uint8Array): boolean {
     if (!this.binaryRelaySupported) {
@@ -209,13 +209,6 @@ export class SignalingLadderClient {
         }
       }
 
-      // If all WebSocket lanes are heavily buffered (> 3 MiB) and HTTP burst lanes have capacity,
-      // spill over onto HTTP Binary Burst Route 3 in parallel!
-      if ((chosen.bufferedAmount || 0) > 3 * 1024 * 1024 && this.httpInFlight < 4) {
-        void this.sendHttpTurboBurst(toDeviceId, frame);
-        return true;
-      }
-
       const idBytes = textEncoder.encode(toDeviceId);
       const packet = new Uint8Array(3 + idBytes.byteLength + frame.byteLength);
       packet[0] = 0x4d; // 'M'
@@ -228,11 +221,11 @@ export class SignalingLadderClient {
         chosen.send(packet.buffer);
         return true;
       } catch {
-        // Fallback to HTTP Turbo Burst below
+        // Fallback to HTTP Turbo Burst below only if WebSocket send threw
       }
     }
 
-    // Route 3 Backup: Direct HTTP Binary Burst POST /api/turbo-relay
+    // Route 3 Backup (only when no WebSocket is open): Direct HTTP Binary Burst POST /api/turbo-relay
     void this.sendHttpTurboBurst(toDeviceId, frame);
     return true;
   }
@@ -280,11 +273,11 @@ export class SignalingLadderClient {
     return minBuf === Infinity ? 0 : minBuf;
   }
 
-  public async waitForRelayDrain(thresholdBytes = 2 * 1024 * 1024): Promise<void> {
+  public async waitForRelayDrain(thresholdBytes = 1024 * 1024): Promise<void> {
     let waited = 0;
-    while (!this.destroyed && this.getRelayBufferedAmount() > thresholdBytes && waited < 1500) {
-      await new Promise((r) => setTimeout(r, 12));
-      waited += 12;
+    while (!this.destroyed && this.getRelayBufferedAmount() > thresholdBytes && waited < 1200) {
+      await new Promise((r) => setTimeout(r, 6));
+      waited += 6;
     }
   }
 

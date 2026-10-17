@@ -5,12 +5,12 @@ import {
   DEFAULT_CREDIT_WINDOW_BLOCKS,
   MAX_CREDIT_WINDOW_BLOCKS,
 } from '@shareapp/shared';
-import { sha256Hex } from '../../utils/sha256.js';
 import {
   BinaryFrameType,
   encodeBinaryFrame,
   type BlockEndPayload,
 } from '../protocol/index.js';
+import { transferWorkerPool } from '../worker/workerPool.js';
 
 export interface FileSenderCallbacks {
   sendDataChannel: (frame: Uint8Array) => Promise<void> | void;
@@ -39,6 +39,10 @@ export class FileSenderPipeline {
   private totalBlocks: number;
   private pendingBlocks: number[] = [];
   private blockAckTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private prefetchedBlocks = new Map<
+    number,
+    Promise<{ blockBuffer: ArrayBuffer; blockHash: string }>
+  >();
 
   private isPaused = false;
   private isCancelled = false;
@@ -47,6 +51,7 @@ export class FileSenderPipeline {
 
   private startTime = Date.now();
   private lastSpeedSampleTime = Date.now();
+  private lastProgressEmitTime = 0;
   private lastActivityTime = Date.now();
   private lastAckedBytes = 0;
   private acknowledgedBytes = 0;
@@ -109,6 +114,7 @@ export class FileSenderPipeline {
       clearTimeout(t);
     }
     this.blockAckTimers.clear();
+    this.prefetchedBlocks.clear();
   }
 
   public grantCredits(credits: number) {
@@ -208,6 +214,34 @@ export class FileSenderPipeline {
     this.clearAllBlockTimers();
   }
 
+  private getOrPrefetchBlock(
+    blockIndex: number
+  ): Promise<{ blockBuffer: ArrayBuffer; blockHash: string }> {
+    const existing = this.prefetchedBlocks.get(blockIndex);
+    if (existing) {
+      this.prefetchedBlocks.delete(blockIndex);
+      return existing;
+    }
+    const startByte = blockIndex * this.blockSize;
+    const endByte = Math.min(this.file.size, (blockIndex + 1) * this.blockSize);
+    return transferWorkerPool.sliceAndHashBlock(this.file, startByte, endByte);
+  }
+
+  private triggerNextBlockPrefetch(nextBlockIndex: number | undefined) {
+    if (
+      nextBlockIndex === undefined ||
+      this.acknowledgedBlocks.has(nextBlockIndex) ||
+      this.prefetchedBlocks.has(nextBlockIndex) ||
+      this.prefetchedBlocks.size >= 2
+    ) {
+      return;
+    }
+    const startByte = nextBlockIndex * this.blockSize;
+    const endByte = Math.min(this.file.size, (nextBlockIndex + 1) * this.blockSize);
+    const promise = transferWorkerPool.sliceAndHashBlock(this.file, startByte, endByte);
+    this.prefetchedBlocks.set(nextBlockIndex, promise);
+  }
+
   private async pump() {
     if (this.inFlight || this.isPaused || this.isCancelled || this.isCompleted) return;
     this.inFlight = true;
@@ -223,6 +257,11 @@ export class FileSenderPipeline {
         const blockIdx = this.pendingBlocks.shift()!;
         if (this.acknowledgedBlocks.has(blockIdx)) continue;
         this.availableCredits--;
+
+        // Double-buffer prefetch: kick off Worker slice + SHA-256 for the next block in queue
+        // while the current block is streaming across the network!
+        const nextBlockIdx = this.pendingBlocks[0];
+        this.triggerNextBlockPrefetch(nextBlockIdx);
 
         await this.sendBlock(blockIdx);
       }
@@ -246,10 +285,8 @@ export class FileSenderPipeline {
       ) {
         return;
       }
-      // If transport buffer is still actively draining or another block was ACKed in the last 4s,
-      // extend watchdog so we never flood the pipe with premature duplicate blocks!
       const timeSinceLastActivity = Date.now() - this.lastActivityTime;
-      if (this.callbacks.getBufferedAmount() > 256 * 1024 || timeSinceLastActivity < 4000) {
+      if (this.callbacks.getBufferedAmount() > 128 * 1024 || timeSinceLastActivity < 4500) {
         const nextTimer = setTimeout(check, 4500);
         this.blockAckTimers.set(blockIndex, nextTimer);
         return;
@@ -257,17 +294,13 @@ export class FileSenderPipeline {
       this.retryBlock(blockIndex);
     };
 
-    const timer = setTimeout(check, 7000);
+    const timer = setTimeout(check, 7500);
     this.blockAckTimers.set(blockIndex, timer);
   }
 
   private async sendBlock(blockIndex: number) {
     const startByte = blockIndex * this.blockSize;
-    const endByte = Math.min(this.file.size, (blockIndex + 1) * this.blockSize);
-    const slice = this.file.slice(startByte, endByte);
-    const blockBuffer = await slice.arrayBuffer();
-
-    const blockHash = await sha256Hex(blockBuffer);
+    const { blockBuffer, blockHash } = await this.getOrPrefetchBlock(blockIndex);
 
     const totalBlockBytes = blockBuffer.byteLength;
     const numChunks = Math.max(1, Math.ceil(totalBlockBytes / this.chunkSize));
@@ -302,8 +335,6 @@ export class FileSenderPipeline {
       const maybePromise = this.callbacks.sendDataChannel(frame);
       if (maybePromise && typeof (maybePromise as Promise<void>).then === 'function') {
         await maybePromise;
-      } else if (c % 32 === 31) {
-        await new Promise((r) => setTimeout(r, 0));
       }
 
       const currentInFlight = startByte + cEnd;
@@ -311,8 +342,13 @@ export class FileSenderPipeline {
         this.rawBytesSent = Math.min(this.file.size, currentInFlight);
       }
 
-      if (this.callbacks.onChunkProgress && (c % 6 === 0 || c === numChunks - 1)) {
-        const elapsed = Math.max(0.05, (Date.now() - this.startTime) / 1000);
+      const now = Date.now();
+      if (
+        this.callbacks.onChunkProgress &&
+        (now - this.lastProgressEmitTime >= 100 || c === numChunks - 1)
+      ) {
+        this.lastProgressEmitTime = now;
+        const elapsed = Math.max(0.05, (now - this.startTime) / 1000);
         const honestBytes = Math.min(
           this.rawBytesSent,
           this.acknowledgedBytes + this.blockSize * 4
@@ -340,7 +376,6 @@ export class FileSenderPipeline {
     });
 
     // 2. Also send in-band BinaryFrameType.BLOCK_END frame over data route
-    // so multi-route / parallel lanes can verify the block immediately without waiting for ctl
     try {
       const endPayloadBytes = textEncoder.encode(JSON.stringify(blockEndPayload));
       const inBandEndFrame = encodeBinaryFrame(
@@ -353,7 +388,10 @@ export class FileSenderPipeline {
         },
         endPayloadBytes
       );
-      await this.callbacks.sendDataChannel(inBandEndFrame);
+      const endRes = this.callbacks.sendDataChannel(inBandEndFrame);
+      if (endRes && typeof (endRes as Promise<void>).then === 'function') {
+        await endRes;
+      }
     } catch {
       /* control channel fallback already sent */
     }

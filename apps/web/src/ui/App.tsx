@@ -836,10 +836,15 @@ export function App() {
                   </div>
                 ) : (
                   <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                    {transfers.slice(0, 6).map((t) => {
+                    {transfers.slice(0, 10).map((t) => {
                       const isSent = t.direction === 'sending' || t.direction === 'send';
                       const speedStr = formatTransferSpeed(t);
                       const hasBlob = Boolean(t.blobUrl || t.fileBlob || t.blob);
+                      const routeLabel = t.channel === 'direct' ? 'Direct P2P' : 'Relay';
+                      const etaStr =
+                        t.status === 'transferring' && t.etaSeconds > 0 && t.etaSeconds < 36000
+                          ? `${Math.max(1, Math.ceil(t.etaSeconds))}s left`
+                          : '';
                       return (
                         <div
                           key={t.id}
@@ -852,9 +857,10 @@ export function App() {
                               </div>
                               <div className="min-w-0">
                                 <p className="text-xs font-bold text-white truncate">{t.name}</p>
-                                <p className="text-[10px] font-mono text-slate-400">
-                                  {isSent ? '↑ Sent' : '↓ Received'} • {formatSize(t.size)}
-                                  {speedStr ? ` • ${speedStr}` : ''}
+                                <p className="text-[10px] font-mono tabular-nums text-slate-400">
+                                  {isSent ? '↑ Sent' : '↓ Received'} · {formatSize(t.size)}
+                                  {t.status === 'transferring' ? ` · ${routeLabel}` : ''}
+                                  {speedStr ? ` · ${speedStr}` : ''}
                                 </p>
                               </div>
                             </div>
@@ -879,13 +885,25 @@ export function App() {
                                 </>
                               )}
                               {t.status === 'completed' && (
-                                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-semibold">
-                                  VERIFIED
+                                <span className="text-emerald-400 text-[10px] font-mono font-semibold">
+                                  Verified
+                                </span>
+                              )}
+                              {t.status === 'queued' && (
+                                <span className="text-sky-300 text-[10px] font-mono font-semibold">
+                                  {t.batchIndex && t.batchTotal
+                                    ? `Queued · #${t.batchIndex}/${t.batchTotal}`
+                                    : 'Queued'}
+                                </span>
+                              )}
+                              {t.status === 'waiting' && (
+                                <span className="text-amber-300 text-[10px] font-mono font-semibold">
+                                  Awaiting accept
                                 </span>
                               )}
                               {t.status === 'failed' && (
-                                <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-mono font-semibold">
-                                  FAILED
+                                <span className="text-rose-400 text-[10px] font-mono font-semibold">
+                                  Failed
                                 </span>
                               )}
                             </div>
@@ -893,17 +911,34 @@ export function App() {
 
                           {(t.status === 'transferring' ||
                             t.status === 'pending' ||
-                            t.status === 'waiting') && (
+                            t.status === 'waiting' ||
+                            t.status === 'queued') && (
                             <div>
                               <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
                                 <div
-                                  className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all duration-150"
-                                  style={{ width: `${Math.max(4, t.progress)}%` }}
+                                  className={`h-full transition-all duration-150 ${
+                                    t.status === 'queued' || t.status === 'waiting'
+                                      ? 'bg-slate-500/50'
+                                      : 'bg-gradient-to-r from-sky-400 to-indigo-500'
+                                  }`}
+                                  style={{
+                                    width: `${
+                                      t.status === 'queued' || t.status === 'waiting'
+                                        ? 4
+                                        : Math.max(4, t.progress)
+                                    }%`,
+                                  }}
                                 />
                               </div>
-                              <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                              <div className="flex justify-between text-[10px] font-mono tabular-nums text-slate-400 mt-1">
                                 <span>{t.progress}%</span>
-                                <span>{speedStr || 'Streaming…'}</span>
+                                <span>
+                                  {t.status === 'queued'
+                                    ? 'Queued in batch — starts automatically next'
+                                    : t.status === 'waiting'
+                                    ? 'Waiting for receiver approval…'
+                                    : [speedStr, etaStr].filter(Boolean).join(' · ') || 'Streaming…'}
+                                </span>
                               </div>
                             </div>
                           )}

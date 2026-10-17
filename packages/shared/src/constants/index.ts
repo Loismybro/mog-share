@@ -8,16 +8,16 @@ export const APP_VERSION = '1.0.0';
 // ---------------------------------------------------------------------------
 // High-Throughput Multi-Route Transfer Engine Constants
 // ---------------------------------------------------------------------------
-export const DEFAULT_CHUNK_SIZE = 16 * 1024; // 16 KiB payload (universally safe across all WebRTC SCTP stacks)
+export const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64 KiB payload (optimal WebRTC SCTP & LocalSend chunk size, 4x fewer headers)
 export const MAX_CHUNK_SIZE = 64 * 1024; // 64 KiB ceiling
-export const DEFAULT_BLOCK_SIZE = 256 * 1024; // 256 KiB blocks (16 chunks) for fast streaming ACK turnaround
+export const DEFAULT_BLOCK_SIZE = 2 * 1024 * 1024; // 2 MiB blocks (32 chunks) for hardware WebCrypto & minimal ACK overhead
 
 // Flow control watermarks (Layer 1 - Transport)
-export const BUFFERED_AMOUNT_LOW_THRESHOLD = 512 * 1024; // 512 KiB low watermark
-export const BUFFERED_AMOUNT_HIGH_WATERMARK = 8 * 1024 * 1024; // 8 MiB high watermark for full multi-channel saturation
+export const BUFFERED_AMOUNT_LOW_THRESHOLD = 256 * 1024; // 256 KiB per-channel low watermark (triggers native bufferedamountlow)
+export const BUFFERED_AMOUNT_HIGH_WATERMARK = 2 * 1024 * 1024; // 2 MiB per-channel high watermark (8 MiB across 4 channels)
 
 // Credit-based flow control (Layer 2 - Application)
-export const DEFAULT_CREDIT_WINDOW_BLOCKS = 16; // 16 blocks = 4 MiB in-flight sliding window
+export const DEFAULT_CREDIT_WINDOW_BLOCKS = 16; // 16 blocks = 32 MiB in-flight sliding window (zero stop-and-wait pauses)
 export const MIN_CREDIT_WINDOW_BLOCKS = 8;
 export const MAX_CREDIT_WINDOW_BLOCKS = 48;
 export const MAX_BLOCK_RETRIES = 6;

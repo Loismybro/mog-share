@@ -6,12 +6,13 @@ import {
   BinaryFrameType,
   decodeBinaryFrame,
   transferIdToNum,
+  type BinaryFrameHeader,
   type BlockEndPayload,
   type BlockAckPayload,
   type CreditGrantPayload,
 } from '../protocol/index.js';
 import type { BlockWriter } from '../storage/index.js';
-import { sha256Hex } from '../../utils/sha256.js';
+import { transferWorkerPool } from '../worker/workerPool.js';
 
 export interface FileReceiverCallbacks {
   sendCtlMessage: (message: unknown) => void;
@@ -41,6 +42,7 @@ export class FileReceiverPipeline {
   private transferIdNum = 0;
   private verifying = new Set<number>();
   private finalized = false;
+  private lastProgressEmitTime = 0;
 
   constructor(
     transferId: string,
@@ -68,6 +70,10 @@ export class FileReceiverPipeline {
     }
   }
 
+  public getTransferIdNum(): number {
+    return this.transferIdNum;
+  }
+
   private clearStallTimer(blockIndex: number) {
     const t = this.blockStallTimers.get(blockIndex);
     if (t) {
@@ -83,7 +89,6 @@ export class FileReceiverPipeline {
     }
     const timer = setTimeout(() => {
       if (!this.verifiedBlocks.has(blockIndex) && !this.finalized) {
-        // Keep already-received valid chunks in memory and request block retransmission
         this.callbacks.sendCtlMessage({
           type: 'block-retry',
           payload: { transferId: this.transferId, blockIndex },
@@ -108,9 +113,11 @@ export class FileReceiverPipeline {
     } catch {
       return;
     }
+    this.handleDecodedDataFrame(decoded.header, decoded.payload);
+  }
 
+  public handleDecodedDataFrame(header: BinaryFrameHeader, payload: Uint8Array) {
     try {
-      const { header, payload } = decoded;
       if (header.transferIdNum !== this.transferIdNum) return;
 
       if (header.type === BinaryFrameType.BLOCK_END) {
@@ -148,7 +155,9 @@ export class FileReceiverPipeline {
           this.resetStallTimer(header.blockIndex);
         }
 
-        if (header.chunkIndex % 4 === 0) {
+        const now = Date.now();
+        if (now - this.lastProgressEmitTime >= 100) {
+          this.lastProgressEmitTime = now;
           let inFlightBytes = 0;
           for (const [bIdx, bBytes] of this.blockReceivedBytes.entries()) {
             if (!this.verifiedBlocks.has(bIdx)) inFlightBytes += bBytes;
@@ -199,7 +208,6 @@ export class FileReceiverPipeline {
       this.callbacks.onError(err as Error);
     } finally {
       this.verifying.delete(blockIndex);
-      // If more chunks arrived while we were awaiting verification and block is still unverified, re-check
       if (
         !this.verifiedBlocks.has(blockIndex) &&
         !this.finalized &&
@@ -248,17 +256,18 @@ export class FileReceiverPipeline {
       return;
     }
 
-    const assembledBlock = new Uint8Array(endMeta.byteLength);
-    let offset = 0;
+    const sortedChunks: Uint8Array[] = [];
     for (const idx of sortedIndices) {
-      const chunk = chunksMap.get(idx)!;
-      assembledBlock.set(chunk, offset);
-      offset += chunk.byteLength;
+      sortedChunks.push(chunksMap.get(idx)!);
     }
 
-    const hashHex = await sha256Hex(assembledBlock);
+    const { verified, assembledBlock } = await transferWorkerPool.assembleAndVerifyBlock(
+      sortedChunks,
+      endMeta.byteLength,
+      endMeta.blockHash
+    );
 
-    if (hashHex !== endMeta.blockHash) {
+    if (!verified || !assembledBlock) {
       const retries = (this.blockRetryCounts.get(blockIndex) || 0) + 1;
       this.blockRetryCounts.set(blockIndex, retries);
 
@@ -308,6 +317,7 @@ export class FileReceiverPipeline {
       payload: creditGrant,
     });
 
+    this.lastProgressEmitTime = Date.now();
     this.callbacks.onProgress(this.verifiedBytes, this.totalBytes);
     this.callbacks.onBlockVerified(blockIndex);
 

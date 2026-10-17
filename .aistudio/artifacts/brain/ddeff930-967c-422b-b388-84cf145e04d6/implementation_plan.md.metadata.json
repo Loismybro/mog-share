@@ -1,0 +1,6 @@
+{
+  "summary": "Architectural plan for upgrading the file transfer engine with LocalSend-inspired batch session preparation (prepare-upload with sessionId and tokens), strict P2P WebRTC routing without cloud relay spillover, sequential zero-contention multi-file queueing, and Web Worker + hardware WebCrypto off-main-thread streaming.",
+  "updatedAt": "2026-10-17T14:05:50.793260116Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

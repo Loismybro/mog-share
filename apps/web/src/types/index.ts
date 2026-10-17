@@ -42,6 +42,7 @@ export interface Device {
 }
 
 export type TransferStatus =
+  | 'queued'
   | 'waiting'
   | 'connecting'
   | 'transferring'
@@ -61,6 +62,8 @@ export interface FileMeta {
   totalChunks?: number;
   sha256?: string;
   lastModified?: number;
+  transferId?: string;
+  fileIndex?: number;
 }
 
 export interface TransferFile {
@@ -84,11 +87,15 @@ export interface TransferFile {
   savedToDisk?: boolean;
   createdAt: number;
   bytesTransferred?: number;
+  sessionId?: string;
+  batchIndex?: number;
+  batchTotal?: number;
 }
 
 export interface IncomingRequest {
   id?: string;
   transferId: string;
+  sessionId?: string;
   fromId: string;
   fromName: string;
   fromPlatform?: Platform;

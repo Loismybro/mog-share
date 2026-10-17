@@ -147,7 +147,9 @@ export const ReceiveModal: React.FC<ReceiveModalProps> = ({
             className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl mog-btn-primary text-xs font-bold cursor-pointer"
           >
             <Check className="w-4 h-4" />
-            <span>Accept & Save</span>
+            <span>
+              {filesList.length > 1 ? `Accept All (${filesList.length})` : 'Accept & Save'}
+            </span>
           </button>
         </div>
       </div>
