@@ -585,16 +585,39 @@ function ensureDeviceSession(
   clientIp: string,
   payload?: Record<string, unknown>
 ): DeviceSession {
+  const connNetworkKey = deriveNetworkKey(clientIp, SERVER_SALT);
+  const clientKeys = Array.isArray(payload?.networkKeys) ? (payload.networkKeys as string[]) : [];
+
   let sess = groupIndex.getSession(from);
   if (sess) {
     groupIndex.cancelDisconnect(from);
     sess.lastSeen = Date.now();
     sess.heartbeatComplete = true;
+    const ipChanged = sess.clientIp !== clientIp;
     sess.clientIp = clientIp;
+
+    if (ipChanged || clientKeys.length > 0) {
+      const freshKeys = deriveNetworkKeySet(clientIp, SERVER_SALT, [
+        ...clientKeys,
+        connNetworkKey,
+      ]);
+      // Merge existing keys if only clientIp updated without explicit clientKeys, or replace if clientKeys provided
+      if (clientKeys.length > 0) {
+        sess.networkKeys = freshKeys;
+      } else {
+        const merged = new Set(sess.networkKeys);
+        for (const k of freshKeys) merged.add(k);
+        sess.networkKeys = merged;
+      }
+      groupIndex.registerDevice(sess);
+    }
     return sess;
   }
-  const connNetworkKey = deriveNetworkKey(clientIp, SERVER_SALT);
-  const combinedKeys = deriveNetworkKeySet(clientIp, SERVER_SALT, [connNetworkKey]);
+
+  const combinedKeys = deriveNetworkKeySet(clientIp, SERVER_SALT, [
+    ...clientKeys,
+    connNetworkKey,
+  ]);
   sess = {
     deviceId: from,
     name: String(payload?.name || `Device (${from.slice(0, 4)})`).slice(0, 48),
@@ -609,6 +632,7 @@ function ensureDeviceSession(
   groupIndex.registerDevice(sess);
   return sess;
 }
+
 
 function handleIncomingSocketMessage(
   ws: WebSocket,

@@ -61,6 +61,28 @@ describe('Signaling, Discovery, Auto-Device Detection & Integrity Subsystems', (
     expect(overlap.length).toBeGreaterThan(0);
   });
 
+  it('groups mobile hotspot host and tethered client across CGNAT pools and 3GPP /48 IPv6 prefixes', () => {
+    const salt = 'hotspot-salt-42';
+
+    // Case 1: Phone hotspot host on cellular IPv6 (2409:40c0:1a2b:8001::1) + CGNAT IPv4 (49.36.120.14),
+    // Tethered client on adjacent 3GPP /64 (2409:40c0:1a2b:8002::5) or CGNAT IPv4 pool (49.36.120.89)
+    const hostKeys = deriveNetworkKeySet('2409:40c0:1a2b:8001::1', salt, [
+      'v4:49.36.120.14',
+      'v4sub24:192.168.43',
+    ]);
+    const tetheredV4Keys = deriveNetworkKeySet('49.36.120.89', salt, ['v4:49.36.120.89']);
+    const tetheredV6Keys = deriveNetworkKeySet('2409:40c0:1a2b:8002::5', salt, [
+      'v6:2409:40c0:1a2b:8002',
+    ]);
+
+    const overlapV4 = Array.from(hostKeys).filter((k) => tetheredV4Keys.has(k));
+    const overlapV6 = Array.from(hostKeys).filter((k) => tetheredV6Keys.has(k));
+
+    expect(overlapV4.length).toBeGreaterThan(0);
+    expect(overlapV6.length).toBeGreaterThan(0);
+  });
+
+
   it('extracts /64 prefix correctly for diverse IPv6 address formats', () => {
     const fullV6 = '2001:0db8:85a3:0000:0000:8a2e:0370:7334';
     expect(extractIpv6Prefix64(fullV6)).toBe('2001:0db8:85a3:0000');

@@ -209,6 +209,9 @@ export class NetworkService {
   private subscribers = new Set<() => void>();
   private pendingIncomingReq: IncomingRequest | null = null;
   private chatHistory: ChatMessage[] = [];
+  private probeRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private isProbingNetwork = false;
+
 
   constructor(
     deviceName?: string,
@@ -310,8 +313,10 @@ export class NetworkService {
       (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000');
 
     this.initLocalBroadcastBus();
+    this.initNetworkChangeListeners();
     void this.initialize();
   }
+
 
   private enqueueOrAutoAcceptIncomingRequest(req: IncomingRequest) {
     const autoAcceptUntil = this.autoAcceptPeers.get(req.fromId) || 0;
@@ -558,14 +563,17 @@ export class NetworkService {
         name: this.deviceName,
         platform: this.platform,
         model: this.deviceProfile?.model,
+        networkKeys: this.probeResult?.networkKeys || ['local-lan'],
       });
       this.signaling.send('ping', { clientTime: this.lastPingSent });
+      void this.refreshNetworkProbeAndJoin();
     } else if (this.state !== 'connecting') {
       void this.initialize();
     }
     this.broadcastLocalBusPresence(true);
     this.emitVisiblePeers();
   }
+
 
   private deduplicateDeviceList(rawList: Device[]): Device[] {
     const byId = new Map<string, Device>();
@@ -785,6 +793,7 @@ export class NetworkService {
         onStateChange: (state, _rung) => {
           if (state === 'connected') {
             this.sendJoinMessage();
+            void this.refreshNetworkProbeAndJoin();
             if (this.currentRoomCode) {
               this.signaling?.send('join-room', {
                 roomCode: this.currentRoomCode,
@@ -815,12 +824,7 @@ export class NetworkService {
 
       void (async () => {
         await this.fetchTurnCredentials();
-        const probed = await probeNetwork(this.serverUrl, this.iceServers);
-        if (this.destroyed) return;
-        this.probeResult = probed;
-        if (this.signaling && this.state === 'ready') {
-          this.sendJoinMessage();
-        }
+        await this.refreshNetworkProbeAndJoin();
       })();
 
       await connectPromise;
@@ -828,6 +832,55 @@ export class NetworkService {
       this.setState('error', (err as Error).message);
     }
   }
+
+  private async refreshNetworkProbeAndJoin(): Promise<void> {
+    if (this.destroyed || this.isProbingNetwork) return;
+    this.isProbingNetwork = true;
+    try {
+      const probed = await probeNetwork(this.serverUrl, this.iceServers);
+      if (this.destroyed) return;
+      this.probeResult = probed;
+      if (this.signaling && this.state === 'ready') {
+        this.sendJoinMessage();
+      }
+    } catch {
+      /* ignore transient probe failure */
+    } finally {
+      this.isProbingNetwork = false;
+    }
+  }
+
+  private initNetworkChangeListeners() {
+    if (typeof window === 'undefined') return;
+    const triggerReprobe = () => {
+      if (this.destroyed) return;
+      void this.refreshNetworkProbeAndJoin();
+    };
+    try {
+      window.addEventListener('online', triggerReprobe);
+      window.addEventListener('focus', triggerReprobe);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            triggerReprobe();
+          }
+        });
+      }
+      const navConn = (navigator as any)?.connection;
+      if (navConn && typeof navConn.addEventListener === 'function') {
+        navConn.addEventListener('change', triggerReprobe);
+      }
+      // Periodic 15s network key refresh so toggling Mobile Hotspot on/off is picked up automatically
+      this.probeRefreshTimer = setInterval(() => {
+        if (!this.destroyed && this.state === 'ready') {
+          void this.refreshNetworkProbeAndJoin();
+        }
+      }, 15_000);
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+
 
   private async fetchTurnCredentials() {
     try {
@@ -2135,6 +2188,11 @@ export class NetworkService {
       clearInterval(this.localBusTimer);
       this.localBusTimer = null;
     }
+    if (this.probeRefreshTimer) {
+      clearInterval(this.probeRefreshTimer);
+      this.probeRefreshTimer = null;
+    }
+
     if (this.localBus) {
       try {
         this.localBus.postMessage({ kind: 'bye', from: this.deviceId });
