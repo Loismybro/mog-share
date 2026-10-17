@@ -1,470 +1,203 @@
-import * as React from "react";
-import { useEffect, useRef } from "react";
+import * as React from 'react';
+import { useEffect, useRef } from 'react';
 
 const MAX_DPR = 2;
-const FACE =
-  '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-const CHARS =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789<>/\\{}[]()=+-*#$%&@?!";
-const FS = 0.018;
+const MONO_FONT = '"JetBrains Mono", "Fira Code", monospace';
+const DISPLAY_FONT = '"Space Grotesk", "Plus Jakarta Sans", system-ui, sans-serif';
+const CHARS = '01X>$#+-•:*=@%';
 
-const HOVER_K = 1;
-const MORPH_TAU = 0.46;
-
-const SHAPES: Record<string, string> = {
-  circle: "M12 1A11 11 0 1 1 11.99 1Z",
-  ring: "M12 1A11 11 0 1 1 11.99 1ZM12 6A6 6 0 1 1 11.99 6Z",
-  square: "M1 1H23V23H1Z",
-  rounded:
-    "M6 1H18A5 5 0 0 1 23 6V18A5 5 0 0 1 18 23H6A5 5 0 0 1 1 18V6A5 5 0 0 1 6 1Z",
-  triangle: "M12 1L21.53 17.5H2.47Z",
-  diamond: "M12 1L23 12L12 23L1 12Z",
-  pentagon: "M12 1L22.46 8.6L18.47 20.9H5.53L1.54 8.6Z",
-  hexagon: "M12 1L21.53 6.5V17.5L12 23L2.47 17.5V6.5Z",
-  star: "M12 1L14.59 8.44L22.46 8.6L16.18 13.36L18.47 20.9L12 16.4L5.53 20.9L7.82 13.36L1.54 8.6L9.41 8.44Z",
-  burst:
-    "M12 1L14.11 6.92L19.78 4.22L17.08 9.9L23 12L17.08 14.1L19.78 19.78L14.11 17.08L12 23L9.89 17.08L4.22 19.78L6.92 14.1L1 12L6.92 9.9L4.22 4.22L9.89 6.92Z",
-  cross: "M9 1H15V9H23V15H15V23H9V15H1V9H9Z",
-  arrow: "M1 9H13V3L23 12L13 21V15H1Z",
-  heart:
-    "M12 21.35L10.55 20.03C5.4 15.36 2 12.28 2 8.5C2 5.42 4.42 3 7.5 3C9.24 3 10.91 3.81 12 5.09C13.09 3.81 14.76 3 16.5 3C19.58 3 22 5.42 22 8.5C22 12.28 18.6 15.36 13.45 20.04L12 21.35Z",
-  drop: "M12 1C12 1 21 10.5 21 15.5A9 9 0 1 1 3 15.5C3 10.5 12 1 12 1Z",
-  moon: "M14 1C7.9 1 3 5.9 3 12C3 18.1 7.9 23 14 23C15.8 23 17.5 22.6 19 21.8C13.5 20.4 9.5 16.7 9.5 12C9.5 7.3 13.5 3.6 19 2.2C17.5 1.4 15.8 1 14 1Z",
-  blob: "M15.5 2C20 3.5 23 7 22.5 12C22 17 18.5 22 13 22.5C7.5 23 3 19.5 2 14.5C1 9.5 3.5 4 8 2C10.5 1 13 1 15.5 2Z",
-};
-
-const PATH_A = SHAPES.circle;
-const PATH_B = SHAPES.diamond;
-
-function shapeKey(v: unknown, fb: string): string {
-  const k = typeof v === "string" ? v : "";
-  return SHAPES[k] ? k : fb;
+interface Pt {
+  x: number; // normalized -0.5 .. 0.5
+  y: number; // normalized -0.5 .. 0.5
+  edge: boolean;
 }
-
-function num(v: unknown, fb: number): number {
-  return typeof v === "number" && isFinite(v) ? v : fb;
-}
-
-function clampN(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
-function rng(seed: number): () => number {
-  let s = seed >>> 0;
-  return function () {
-    s ^= s << 13;
-    s >>>= 0;
-    s ^= s >> 17;
-    s ^= s << 5;
-    s >>>= 0;
-    return s / 4294967296;
-  };
-}
-
-function parseRGB(
-  input: string | undefined,
-  fb: [number, number, number]
-): [number, number, number] {
-  if (!input) return fb;
-  const str = String(input).trim();
-  if (str.charAt(0) === "#") {
-    let hex = str.slice(1);
-    if (hex.length === 3 || hex.length === 4) {
-      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-    }
-    if (hex.length >= 6) {
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return [r, g, b];
-    }
-    return fb;
-  }
-  const m = str.match(/[\d.]+/g);
-  if (m && m.length >= 3) return [+m[0], +m[1], +m[2]];
-  return fb;
-}
-
-type Pt = { x: number; y: number };
-type Mask = { img: ImageData; size: number };
-
-const MASK_SIZE = 320;
-
-function maskCanvas(size: number) {
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  return c;
-}
-
-function maskFromPath(d: string, size: number): Mask | null {
-  if (typeof document === "undefined" || typeof Path2D === "undefined")
-    return null;
-  const c = maskCanvas(size);
-  const x = c.getContext("2d", { willReadFrequently: true });
-  if (!x) return null;
-  x.setTransform(size / 24, 0, 0, size / 24, 0, 0);
-  x.fillStyle = "#000";
-  try {
-    x.fill(new Path2D(d), "evenodd");
-  } catch {
-    return null;
-  }
-  x.setTransform(1, 0, 0, 1, 0, 0);
-  return { img: x.getImageData(0, 0, size, size), size };
-}
-
-function maskFromText(
-  text: string,
-  family: string,
-  weight: string,
-  size: number
-): Mask | null {
-  if (typeof document === "undefined") return null;
-  const c = maskCanvas(size);
-  const x = c.getContext("2d", { willReadFrequently: true });
-  if (!x) return null;
-  const box = size * 0.86;
-  x.textAlign = "center";
-  x.textBaseline = "middle";
-
-  const lines = String(text).split("\n");
-  const probe = 100;
-  x.font = weight + " " + probe + "px " + family;
-  let widest = 1;
-  for (const ln of lines) widest = Math.max(widest, x.measureText(ln).width);
-  const fs = Math.max(
-    4,
-    Math.min((box / widest) * probe, (box / (lines.length * 1.12)) * probe)
-  );
-  x.font = weight + " " + fs.toFixed(1) + "px " + family;
-  x.fillStyle = "#000";
-  const step = fs * 1.12;
-  const y0 = size / 2 - ((lines.length - 1) * step) / 2;
-  for (let i = 0; i < lines.length; i++)
-    x.fillText(lines[i], size / 2, y0 + i * step);
-  return { img: x.getImageData(0, 0, size, size), size };
-}
-
-function maskFromImage(im: HTMLImageElement, size: number): Mask | null {
-  if (typeof document === "undefined" || !im.naturalWidth) return null;
-  const c = maskCanvas(size);
-  const x = c.getContext("2d", { willReadFrequently: true });
-  if (!x) return null;
-  const box = size * 0.86;
-  const k = Math.min(box / im.naturalWidth, box / im.naturalHeight);
-  const dw = im.naturalWidth * k;
-  const dh = im.naturalHeight * k;
-  try {
-    x.drawImage(im, (size - dw) / 2, (size - dh) / 2, dw, dh);
-  } catch {
-    return null;
-  }
-  let img: ImageData;
-  try {
-    img = x.getImageData(0, 0, size, size);
-  } catch {
-    return null;
-  }
-  const d = img.data;
-  let hasAlpha = false;
-  for (let i = 3; i < d.length; i += 4 * 97) {
-    if (d[i] < 250) {
-      hasAlpha = true;
-      break;
-    }
-  }
-  for (let i = 0; i < d.length; i += 4) {
-    const lum = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
-    d[i + 3] = (hasAlpha ? d[i + 3] > 127 : lum > 127) ? 255 : 0;
-  }
-  return { img, size };
-}
-
-function fitPoints(mask: Mask | null, spacing: number, rand: () => number): Pt[] {
-  const out: Pt[] = [];
-  if (!mask) return out;
-  const S = mask.size;
-  const data = mask.img.data;
-  const hit = new Uint8Array(S * S);
-  let x0 = 1e9;
-  let x1 = -1e9;
-  let y0 = 1e9;
-  let y1 = -1e9;
-  let any = false;
-  for (let i = 0; i < S * S; i++) {
-    if (data[i * 4 + 3] <= 128) continue;
-    any = true;
-    hit[i] = 1;
-    const gx = i % S;
-    const gy = (i / S) | 0;
-    if (gx < x0) x0 = gx;
-    if (gx > x1) x1 = gx;
-    if (gy < y0) y0 = gy;
-    if (gy > y1) y1 = gy;
-  }
-  if (!any) return out;
-  const span = Math.max(x1 - x0, y1 - y0) || 1;
-  const mx = (x0 + x1) / 2;
-  const my = (y0 + y1) / 2;
-
-  const cell = Math.max(1.6, spacing * span);
-  for (let gy2 = y0; gy2 < y1; gy2 += cell) {
-    for (let gx2 = x0; gx2 < x1; gx2 += cell) {
-      const jx = gx2 + rand() * cell;
-      const jy = gy2 + rand() * cell;
-      const ix = jx | 0;
-      const iy = jy | 0;
-      if (ix < 0 || ix >= S || iy < 0 || iy >= S || !hit[iy * S + ix]) continue;
-      out.push({ x: (jx - mx) / span, y: (jy - my) / span });
-    }
-  }
-  return out;
-}
-
-function markKeyOf(
-  v: Record<string, number | string>,
-  spacing: number,
-  markSize: number
-): string {
-  return [
-    v.source,
-    v.textA,
-    v.textB,
-    v.fontFamily,
-    v.fontWeight,
-    v.shapeA,
-    v.shapeB,
-    v.imageA,
-    v.imageB,
-    spacing,
-    markSize,
-  ].join("|");
-}
-
-function byAngle(set: Pt[]): number[] {
-  return set
-    .map((p, i) => ({ i, a: Math.atan2(p.y, p.x), r: Math.hypot(p.x, p.y) }))
-    .sort((u, v) => u.a - v.a || u.r - v.r)
-    .map((o) => o.i);
-}
-
-export type CloudGroup = {
-  markSize?: number;
-  spacing?: number;
-  breath?: number;
-};
-const CLOUD_DEFAULTS: Required<CloudGroup> = {
-  markSize: 100,
-  spacing: 106,
-  breath: 18,
-};
-
-export type MarkGroup = {
-  source?: string;
-  textA?: string;
-  textB?: string;
-  shapeA?: string;
-  shapeB?: string;
-  imageA?: string;
-  imageB?: string;
-};
-const MARK_DEFAULTS: Required<
-  Pick<
-    MarkGroup,
-    "source" | "textA" | "textB" | "shapeA" | "shapeB" | "imageA" | "imageB"
-  >
-> = {
-  source: "text",
-  textA: "MOGSHARE",
-  textB: "ZERO DATA",
-  shapeA: "circle",
-  shapeB: "diamond",
-  imageA: "",
-  imageB: "",
-};
 
 export interface MorphingGlyphCloudProps {
-  style?: React.CSSProperties;
-  className?: string;
-  width?: number;
-  height?: number;
-  background?: string;
+  phrases?: string[];
   baseColor?: string;
-  mark?: MarkGroup;
-  glyphSize?: number;
-  speed?: number;
-  cloud?: CloudGroup;
+  accentColor?: string;
+  background?: string;
   autoMorphMs?: number;
+  className?: string;
+  style?: React.CSSProperties;
 }
 
-export default function MorphingGlyphCloud(props: MorphingGlyphCloudProps) {
-  const {
-    style,
-    className,
-    background = "transparent",
-    baseColor = "#00FFFA",
-    mark,
-    glyphSize = 85,
-    speed = 50,
-    cloud,
-    width,
-    height,
-    autoMorphMs = 3800,
-  } = props;
+const DEFAULT_PHRASES = ['MOGSHARE', 'ZERO DATA', 'DIRECT P2P', 'ENCRYPTED'];
 
-  const cloud_ = { ...CLOUD_DEFAULTS, ...(cloud || {}) };
-  const mark_ = { ...MARK_DEFAULTS, ...(mark || {}) };
+function samplePhrasePoints(text: string): Pt[] {
+  if (typeof document === 'undefined') return [];
+  const W = 720;
+  const H = 160;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return [];
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sizeRef = useRef({ w: 0, h: 0 });
-  sizeRef.current = { w: num(width, 0), h: num(height, 0) };
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
 
-  const ptrRef = useRef({ on: 0, x: -1e9, y: -1e9, toggle: 0 });
+  // Fit bold text cleanly across the wide banner
+  let fontSize = 112;
+  ctx.font = `800 ${fontSize}px ${DISPLAY_FONT}`;
+  const measured = ctx.measureText(text).width;
+  const maxW = W * 0.88;
+  if (measured > maxW && measured > 0) {
+    fontSize = Math.max(42, Math.floor((fontSize * maxW) / measured));
+    ctx.font = `800 ${fontSize}px ${DISPLAY_FONT}`;
+  }
 
-  const vRef = useRef<Record<string, number | string>>({});
-  vRef.current = {
-    base: baseColor,
-    source: String(mark_.source || "text"),
-    textA: String(mark_.textA ?? ""),
-    textB: String(mark_.textB ?? ""),
-    shapeA: shapeKey(mark_.shapeA, "circle"),
-    shapeB: shapeKey(mark_.shapeB, "diamond"),
-    imageA: String((mark_ as MarkGroup).imageA || ""),
-    imageB: String((mark_ as MarkGroup).imageB || ""),
-    glyphSize: clampN(num(glyphSize, 100), 20, 300) / 100,
-    speed: clampN(num(speed, 50), 0, 100) / 50,
-    markSize: clampN(num(cloud_.markSize, 88), 20, 100) / 100,
-    spacing: clampN(num(cloud_.spacing, 100), 40, 300) / 100,
-    breath: clampN(num(cloud_.breath, 100), 0, 400) / 100,
+  ctx.fillText(text, W / 2, H / 2);
+
+  const img = ctx.getImageData(0, 0, W, H).data;
+  const isFilled = (x: number, y: number): boolean => {
+    if (x < 0 || x >= W || y < 0 || y >= H) return false;
+    return img[(y * W + x) * 4 + 3] > 110;
   };
 
-  useEffect(() => {
-    if (!autoMorphMs || autoMorphMs <= 0) return;
-    const id = setInterval(() => {
-      ptrRef.current.toggle++;
-    }, autoMorphMs);
-    return () => clearInterval(id);
-  }, [autoMorphMs]);
+  // Find bounding box to normalize tightly
+  let minX = W;
+  let maxX = 0;
+  let minY = H;
+  let maxY = 0;
+  for (let y = 0; y < H; y += 2) {
+    for (let x = 0; x < W; x += 2) {
+      if (isFilled(x, y)) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX <= minX || maxY <= minY) return [];
+
+  const points: Pt[] = [];
+  // Crisp uniform grid step so letterforms are unmistakable and legible
+  const stepX = 6;
+  const stepY = 6;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  for (let y = minY; y <= maxY; y += stepY) {
+    for (let x = minX; x <= maxX; x += stepX) {
+      if (!isFilled(x, y)) continue;
+      const edge =
+        !isFilled(x - stepX, y) ||
+        !isFilled(x + stepX, y) ||
+        !isFilled(x, y - stepY) ||
+        !isFilled(x, y + stepY);
+      points.push({
+        x: (x - cx) / W,
+        y: (y - cy) / H,
+        edge,
+      });
+    }
+  }
+
+  // Sort left-to-right then top-to-bottom for smooth coherent morphing
+  points.sort((a, b) => a.x - b.x || a.y - b.y);
+  return points;
+}
+
+export default function MorphingGlyphCloud({
+  phrases = DEFAULT_PHRASES,
+  baseColor = '#F8FAFC',
+  accentColor = '#38BDF8',
+  background = 'transparent',
+  autoMorphMs = 3600,
+  className,
+  style,
+}: MorphingGlyphCloudProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const ptrRef = useRef({ active: false, x: -9999, y: -9999 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let pair: [Pt, Pt][] = [];
-    let glyphs: { c: string; ph: number; sp: number; wob: number }[] = [];
-    let builtKey = "";
+    const validPhrases = phrases.length > 0 ? phrases : DEFAULT_PHRASES;
+    // Pre-compute point clouds once so morphing never stalls the main thread
+    const clouds: Pt[][] = validPhrases.map((p) => samplePhrasePoints(p));
+    const maxCount = Math.max(1, ...clouds.map((c) => c.length));
 
-    const media = {
-      a: null as HTMLImageElement | null,
-      b: null as HTMLImageElement | null,
-      urlA: "",
-      urlB: "",
-    };
-    const loadInto = (slot: "a" | "b", url: string) => {
-      const im = new Image();
-      im.crossOrigin = "anonymous";
-      im.onload = () => {
-        media[slot] = im;
-        builtKey = "";
-      };
-      im.onerror = () => {
-        media[slot] = null;
-        builtKey = "";
-      };
-      im.src = url;
-    };
+    if (maxCount <= 1) return;
 
-    const maskFor = (
-      v: Record<string, number | string>,
-      side: "A" | "B"
-    ): Mask | null => {
-      const fallbackPath = side === "A" ? PATH_A : PATH_B;
-
-      if ((v.source as string) === "shape") {
-        const key = v[("shape" + side) as "shapeA" | "shapeB"] as string;
-        return maskFromPath(SHAPES[key] || fallbackPath, MASK_SIZE);
+    // Normalize all clouds to equal length `maxCount`
+    const normalizedClouds: Pt[][] = clouds.map((cloud) => {
+      if (cloud.length === 0) {
+        return Array.from({ length: maxCount }, () => ({ x: 0, y: 0, edge: false }));
       }
-      if ((v.source as string) === "image") {
-        const url = v[("image" + side) as "imageA" | "imageB"] as string;
-        if (!url) return maskFromPath(fallbackPath, MASK_SIZE);
-        const slot = side === "A" ? "a" : "b";
-        const urlKey = side === "A" ? "urlA" : "urlB";
-        if (media[urlKey] !== url) {
-          media[urlKey] = url;
-          media[slot] = null;
-          loadInto(slot, url);
-          return maskFromPath(fallbackPath, MASK_SIZE);
-        }
-        const im = media[slot];
-        if (!im) return maskFromPath(fallbackPath, MASK_SIZE);
-        return (
-          maskFromImage(im, MASK_SIZE) || maskFromPath(fallbackPath, MASK_SIZE)
-        );
+      const out: Pt[] = new Array(maxCount);
+      for (let i = 0; i < maxCount; i++) {
+        const srcIdx = Math.floor((i * cloud.length) / maxCount);
+        out[i] = cloud[srcIdx];
       }
-      const text = String(
-        v[("text" + side) as "textA" | "textB"] || ""
-      ).trim();
-      if (!text) return maskFromPath(fallbackPath, MASK_SIZE);
-      return (
-        maskFromText(text, FACE, "700", MASK_SIZE) ||
-        maskFromPath(fallbackPath, MASK_SIZE)
-      );
+      return out;
+    });
+
+    // Particle state
+    const particles = Array.from({ length: maxCount }, (_, i) => ({
+      char: CHARS[i % CHARS.length],
+      phase: (i * 1.37) % (Math.PI * 2),
+      vx: 0,
+      vy: 0,
+      dx: 0,
+      dy: 0,
+    }));
+
+    let currentIdx = 0;
+    let nextIdx = 1 % normalizedClouds.length;
+    let morphProgress = 1; // 1 = settled on currentIdx
+    let lastSwitchTime = performance.now();
+    let rafId = 0;
+    let lastTime = performance.now();
+
+    const triggerNextPhrase = (now: number) => {
+      if (normalizedClouds.length <= 1) return;
+      currentIdx = nextIdx;
+      nextIdx = (currentIdx + 1) % normalizedClouds.length;
+      morphProgress = 0;
+      lastSwitchTime = now;
     };
 
-    const build = (
-      v: Record<string, number | string>,
-      spacing: number,
-      markSize: number
-    ) => {
-      const rand = rng(9152026);
-      const gap = ((FS * 0.6 * 1.06) / Math.max(0.05, markSize)) * spacing;
-      const A = fitPoints(maskFor(v, "A"), gap, rand);
-      const B = fitPoints(maskFor(v, "B"), gap, rand);
-      pair = [];
-      glyphs = [];
-      builtKey = markKeyOf(v, spacing, markSize);
-      if (!A.length || !B.length) return;
-      const oa = byAngle(A);
-      const ob = byAngle(B);
-      const M = Math.min(A.length, B.length);
-      for (let j = 0; j < M; j++) {
-        pair.push([
-          A[oa[((j * A.length) / M) | 0]],
-          B[ob[((j * B.length) / M) | 0]],
-        ]);
-      }
-      for (let i = 0; i < pair.length; i++) {
-        glyphs.push({
-          c: CHARS.charAt((rand() * CHARS.length) | 0),
-          ph: rand() * Math.PI * 2,
-          sp: 0.55 + rand() * 0.9,
-          wob: 0.4 + rand() * 0.8,
-        });
-      }
-    };
-
-    let raf = 0;
-    let last = performance.now();
-    let clock = 0;
-    let m = 0;
-    let target = 0;
-    let seenToggle = 0;
+    // Start settled on phrase 0, then morph every autoMorphMs
+    currentIdx = 0;
+    nextIdx = 0;
+    morphProgress = 1;
 
     const render = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      const v = vRef.current;
-      const sp = v.speed as number;
-      clock += dt * sp;
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+
+      if (autoMorphMs > 0 && now - lastSwitchTime >= autoMorphMs) {
+        currentIdx = nextIdx;
+        nextIdx = (currentIdx + 1) % normalizedClouds.length;
+        morphProgress = 0;
+        lastSwitchTime = now;
+      }
+
+      if (morphProgress < 1) {
+        morphProgress = Math.min(1, morphProgress + dt * 1.85);
+      }
+
+      // Smooth cubic ease-in-out
+      const t =
+        morphProgress < 0.5
+          ? 4 * morphProgress * morphProgress * morphProgress
+          : 1 - Math.pow(-2 * morphProgress + 2, 3) / 2;
 
       const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-      const cw = sizeRef.current.w || canvas.clientWidth || 600;
-      const ch = sizeRef.current.h || canvas.clientHeight || 160;
+      const cw = canvas.clientWidth || 640;
+      const ch = canvas.clientHeight || 110;
       const bw = Math.max(1, Math.round(cw * dpr));
       const bh = Math.max(1, Math.round(ch * dpr));
+
       if (canvas.width !== bw || canvas.height !== bh) {
         canvas.width = bw;
         canvas.height = bh;
@@ -473,136 +206,121 @@ export default function MorphingGlyphCloud(props: MorphingGlyphCloudProps) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);
 
-      if (
-        markKeyOf(v, v.spacing as number, v.markSize as number) !== builtKey
-      ) {
-        build(v, v.spacing as number, v.markSize as number);
-      }
-      if (!pair.length) {
-        raf = requestAnimationFrame(render);
-        return;
-      }
+      const cloudA = normalizedClouds[currentIdx];
+      const cloudB = normalizedClouds[nextIdx];
+
+      const scaleX = Math.min(cw * 0.94, ch * 4.5);
+      const scaleY = Math.min(ch * 0.88, scaleX * 0.24);
+      const centerX = cw / 2;
+      const centerY = ch / 2;
+
+      const glyphPx = Math.max(7, Math.min(11, Math.round(scaleX * 0.0155)));
+      ctx.font = `700 ${glyphPx}px ${MONO_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
 
       const ptr = ptrRef.current;
-      if (ptr.toggle !== seenToggle) {
-        seenToggle = ptr.toggle;
-        target = 1 - target;
-      }
+      const repelRadius = 68;
+      const repelRadiusSq = repelRadius * repelRadius;
+      const transitScatter = 4 * t * (1 - t); // peaks at 1.0 mid-morph
 
-      m += (target - m) * Math.min(1, (dt * sp) / MORPH_TAU);
-      const e = m < 0.5 ? 4 * m * m * m : 1 - Math.pow(-2 * m + 2, 3) / 2;
+      // Draw interior glyphs first, then edge glyphs for crisp contrast
+      for (let pass = 0; pass < 2; pass++) {
+        const isEdgePass = pass === 1;
+        ctx.fillStyle = isEdgePass ? accentColor : baseColor;
+        ctx.globalAlpha = isEdgePass ? 0.96 : 0.92;
 
-      const u = Math.min(cw, ch * 2.8);
-      const span = Math.min(cw * 0.88, u * 1.45) * (v.markSize as number);
-      const cx = cw / 2;
-      const cy = ch / 2;
-      const fs = Math.max(8, u * FS * (v.glyphSize as number));
-      const travel = 4 * e * (1 - e);
-      const breath = u * 0.0035 * (v.breath as number);
+        for (let i = 0; i < maxCount; i++) {
+          const pA = cloudA[i];
+          const pB = cloudB[i];
+          const isEdge = t < 0.5 ? pA.edge : pB.edge;
+          if (isEdge !== isEdgePass) continue;
 
-      const ink = parseRGB(v.base as string, [0, 255, 250]);
-      const rgb = ink[0] + "," + ink[1] + "," + ink[2];
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.font = "bold " + fs.toFixed(2) + "px " + FACE;
-      ctx.fillStyle = "rgba(" + rgb + ",0.88)";
+          const pt = particles[i];
+          const baseX = centerX + (pA.x + (pB.x - pA.x) * t) * scaleX;
+          const baseY = centerY + (pA.y + (pB.y - pA.y) * t) * scaleY;
 
-      const hv = HOVER_K * ptr.on;
-      const rr = u * 0.14;
-      let dirty = false;
+          // Subtle wave during morph transition only
+          const waveY =
+            transitScatter * Math.sin(pt.phase + t * Math.PI * 2) * (scaleY * 0.16);
 
-      for (let i = 0; i < pair.length; i++) {
-        const g = glyphs[i];
-        const p = pair[i];
-        const ux = p[0].x + (p[1].x - p[0].x) * e;
-        const uy = p[0].y + (p[1].y - p[0].y) * e;
-        let pxx = cx + ux * span;
-        let pyy = cy + uy * span;
-
-        pxx += Math.sin(clock * g.sp + g.ph) * breath * g.wob;
-        pyy += Math.cos(clock * g.sp * 0.9 + g.ph) * breath * g.wob;
-        pyy -= travel * Math.sin(g.ph) * u * 0.05;
-
-        let a = 0.88;
-        if (hv > 0) {
-          const dx = pxx - ptr.x;
-          const dy = pyy - ptr.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < rr * rr) {
-            const d = Math.sqrt(d2) || 1;
-            const push = 1 - d / rr;
-            pxx += (dx / d) * push * push * u * 0.055 * hv;
-            pyy += (dy / d) * push * push * u * 0.055 * hv;
-            a = 0.88 - 0.35 * push * hv;
+          // Cursor repulsion spring
+          if (ptr.active) {
+            const rx = baseX - ptr.x;
+            const ry = baseY - ptr.y;
+            const dSq = rx * rx + ry * ry;
+            if (dSq < repelRadiusSq && dSq > 0.01) {
+              const d = Math.sqrt(dSq);
+              const force = (1 - d / repelRadius) * 18;
+              pt.vx += (rx / d) * force;
+              pt.vy += (ry / d) * force;
+            }
           }
-        }
 
-        if (a !== 0.88) {
-          ctx.fillStyle = "rgba(" + rgb + "," + Math.max(0, a).toFixed(3) + ")";
-          dirty = true;
-        } else if (dirty) {
-          ctx.fillStyle = "rgba(" + rgb + ",0.88)";
-          dirty = false;
+          // Spring back to 0 offset
+          pt.vx = (pt.vx - pt.dx * 0.22) * 0.78;
+          pt.vy = (pt.vy - pt.dy * 0.22) * 0.78;
+          pt.dx += pt.vx;
+          pt.dy += pt.vy;
+
+          const drawX = baseX + pt.dx;
+          const drawY = baseY + waveY + pt.dy;
+
+          ctx.fillText(pt.char, drawX, drawY);
         }
-        ctx.fillText(g.c, pxx, pyy);
       }
 
-      raf = requestAnimationFrame(render);
+      ctx.globalAlpha = 1;
+      rafId = requestAnimationFrame(render);
     };
 
-    const track = (e: PointerEvent) => {
-      const r = canvas.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) return;
-      const cw = sizeRef.current.w || canvas.clientWidth || 600;
-      const ch = sizeRef.current.h || canvas.clientHeight || 160;
-      ptrRef.current.x = ((e.clientX - r.left) / r.width) * cw;
-      ptrRef.current.y = ((e.clientY - r.top) / r.height) * ch;
-      ptrRef.current.on = 1;
-    };
-    const onLeave = () => {
-      ptrRef.current.on = 0;
-    };
-    const onDown = () => {
-      ptrRef.current.toggle++;
+    const onPointerMove = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      ptrRef.current.x = e.clientX - rect.left;
+      ptrRef.current.y = e.clientY - rect.top;
+      ptrRef.current.active = true;
     };
 
-    canvas.addEventListener("pointermove", track);
-    canvas.addEventListener("pointerenter", track);
-    canvas.addEventListener("pointerleave", onLeave);
-    canvas.addEventListener("pointerdown", onDown);
-    raf = requestAnimationFrame(render);
+    const onPointerLeave = () => {
+      ptrRef.current.active = false;
+    };
+
+    const onPointerDown = () => {
+      triggerNextPhrase(performance.now());
+    };
+
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerleave', onPointerLeave);
+    canvas.addEventListener('pointerdown', onPointerDown);
+    rafId = requestAnimationFrame(render);
 
     return () => {
-      cancelAnimationFrame(raf);
-      canvas.removeEventListener("pointermove", track);
-      canvas.removeEventListener("pointerenter", track);
-      canvas.removeEventListener("pointerleave", onLeave);
-      canvas.removeEventListener("pointerdown", onDown);
+      cancelAnimationFrame(rafId);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
+      canvas.removeEventListener('pointerdown', onPointerDown);
     };
-  }, []);
+  }, [phrases, baseColor, accentColor, autoMorphMs]);
 
   return (
     <div
       className={className}
       title="Click or hover to morph"
       style={{
-        position: "relative",
-        overflow: "hidden",
+        position: 'relative',
+        width: '100%',
+        height: '100%',
         background,
-        width: typeof width === "number" && width > 0 ? width : "100%",
-        height: typeof height === "number" && height > 0 ? height : "100%",
-        cursor: "pointer",
+        cursor: 'pointer',
         ...style,
       }}
     >
       <canvas
         ref={canvasRef}
         style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          display: "block",
+          width: '100%',
+          height: '100%',
+          display: 'block',
         }}
       />
     </div>

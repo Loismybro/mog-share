@@ -26,7 +26,6 @@ import {
   Trash2,
   Eye,
   ArrowRight,
-  Code2,
   Radio,
   Zap,
   Layers,
@@ -60,19 +59,19 @@ import {
 const network = new NetworkService();
 
 const GLYPH_PHRASES = [
-  'MOGSHARE P2P',
-  'ZERO DATA LAN',
-  'SHA-256 VERIFIED',
-  '3D NEURAL MESH',
+  'MOGSHARE',
+  'ZERO DATA',
+  'DIRECT P2P',
+  'ENCRYPTED',
 ];
 
 export function App() {
-  // Show the full-screen CipherReach Welcome Hero on first visit (unless joining via ?room= link)
+  // Show the full-screen Welcome Hero on first visit (unless joining via ?room= link)
   const [showStartHero, setShowStartHero] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
     if (params.get('room')) return false;
-    return sessionStorage.getItem('mog_entered_mesh') !== 'true';
+    return sessionStorage.getItem('mog_entered_app') !== 'true';
   });
 
   const [activeTab, setActiveTab] = useState<'share' | 'Online' | 'history' | 'vault'>('share');
@@ -105,13 +104,9 @@ export function App() {
   const [deviceNameInput, setDeviceNameInput] = useState(localInfo.name);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(soundEffects.isEnabled());
   const [isScanning, setIsScanning] = useState<boolean>(true);
-  const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
 
   // Personal Vault
   const [vaultItems, setVaultItems] = useState<PersonalSpaceItem[]>([]);
-
-  // Morphing glyph phrase index
-  const [phraseIdx, setPhraseIdx] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -122,13 +117,6 @@ export function App() {
       getPersonalSpaceItems().then(setVaultItems);
     });
     return () => unsubVault();
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setPhraseIdx((prev) => (prev + 1) % GLYPH_PHRASES.length);
-    }, 4200);
-    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -158,8 +146,8 @@ export function App() {
     };
   }, []);
 
-  const enterMesh = () => {
-    sessionStorage.setItem('mog_entered_mesh', 'true');
+  const enterWorkspace = () => {
+    sessionStorage.setItem('mog_entered_app', 'true');
     setShowStartHero(false);
     network.rescanPeers();
   };
@@ -259,28 +247,6 @@ export function App() {
     }
   };
 
-  const handleExportProjectZip = async () => {
-    if (isExportingZip) return;
-    setIsExportingZip(true);
-    try {
-      const res = await fetch('/api/project-zip');
-      if (!res.ok) throw new Error('Failed to build archive');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'mogshare-github-ready.zip';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-    } catch (err) {
-      console.error('Export project zip failed:', err);
-    } finally {
-      setIsExportingZip(false);
-    }
-  };
-
   const handleDownloadReceivedFile = (t: TransferFile) => {
     const rawBlob = t.fileBlob || t.blob;
     const blobUrl = t.blobUrl || (rawBlob ? URL.createObjectURL(rawBlob) : undefined);
@@ -315,7 +281,9 @@ export function App() {
   };
 
   const shareBaseUrl =
-    typeof window !== 'undefined' ? window.location.origin + window.location.pathname : 'http://localhost:3000';
+    typeof window !== 'undefined'
+      ? window.location.origin + window.location.pathname
+      : 'http://localhost:3000';
 
   const getFileIcon = (type: string, name: string) => {
     if (type.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-sky-400" />;
@@ -328,12 +296,12 @@ export function App() {
   };
 
   // =========================================================================
-  // FULL-VIEWPORT INTERACTIVE WELCOME / START HERO (CipherReach + MorphingGlyphCloud)
+  // FULL-VIEWPORT INTERACTIVE WELCOME / START HERO
   // =========================================================================
   if (showStartHero) {
     return (
       <div className="relative min-h-screen w-full bg-[#07090F] text-[#F3F6FA] overflow-hidden flex flex-col justify-between select-none">
-        {/* Full-screen Interactive CipherReach Two Reaching Hands ASCII/Glyph Canvas */}
+        {/* Full-screen Interactive CipherReach Canvas */}
         <div className="absolute inset-0 z-0 opacity-95">
           <CipherReach
             background="#07090F"
@@ -363,26 +331,18 @@ export function App() {
                 <Radio className="w-5 h-5 text-sky-400" />
               </div>
             </div>
-            <div>
-              <span className="font-display text-lg font-bold tracking-tight text-white">
-                MogShare
-              </span>
-              <span className="ml-2 text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-400/30">
-                v3.0 Neural P2P
-              </span>
-            </div>
+            <span className="font-display text-lg font-bold tracking-tight text-white">
+              MogShare
+            </span>
           </div>
 
-          <div className="flex items-center gap-2.5">
-            <button
-              onClick={handleExportProjectZip}
-              disabled={isExportingZip}
-              className="px-3.5 py-2 rounded-xl mog-glass text-xs font-semibold text-slate-200 hover:text-sky-300 border border-white/10 hover:border-sky-400/30 flex items-center gap-2 transition-all cursor-pointer"
-            >
-              <Code2 className="w-4 h-4 text-sky-400" />
-              <span>{isExportingZip ? 'Packaging ZIP…' : 'Export GitHub .ZIP'}</span>
-            </button>
-          </div>
+          <button
+            onClick={enterWorkspace}
+            className="px-4 py-2 rounded-xl mog-glass text-xs font-semibold text-slate-200 hover:text-sky-300 border border-white/10 hover:border-sky-400/30 flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <span>Open App</span>
+            <ArrowRight className="w-3.5 h-3.5 text-sky-400" />
+          </button>
         </header>
 
         {/* Center Hero Content */}
@@ -392,19 +352,14 @@ export function App() {
             <span>ZERO-DATA LOCAL WI-FI & GLOBAL ENCRYPTED ROOMS</span>
           </div>
 
-          {/* MorphingGlyphCloud Kinetic Particle Typography */}
-          <div className="w-full max-w-2xl h-24 sm:h-28 mb-2 pointer-events-auto">
+          {/* Crisp 60fps MorphingGlyphCloud */}
+          <div className="w-full max-w-2xl h-28 sm:h-32 mb-2 pointer-events-auto">
             <MorphingGlyphCloud
+              phrases={GLYPH_PHRASES}
+              baseColor="#F8FAFC"
+              accentColor="#38BDF8"
               background="transparent"
-              baseColor="#38BDF8"
-              mark={{
-                source: 'text',
-                textA: GLYPH_PHRASES[phraseIdx],
-                textB: GLYPH_PHRASES[(phraseIdx + 1) % GLYPH_PHRASES.length],
-              }}
-              glyphSize={95}
-              speed={55}
-              autoMorphMs={3800}
+              autoMorphMs={3600}
             />
           </div>
 
@@ -413,23 +368,23 @@ export function App() {
           </h1>
 
           <p className="text-sm sm:text-base text-slate-300 max-w-xl mb-8 leading-relaxed">
-            Instantly discover nearby Android, iOS, macOS, Windows, and Linux nodes on your
+            Instantly discover nearby Android, iOS, macOS, Windows, and Linux devices on your
             local Wi-Fi with zero mobile data—or bridge across networks with a 6-digit room
             code and SHA-256 block verification.
           </p>
 
           <div className="flex flex-wrap items-center justify-center gap-3.5">
             <button
-              onClick={enterMesh}
+              onClick={enterWorkspace}
               className="px-7 py-3.5 rounded-2xl mog-btn-primary text-sm font-bold flex items-center gap-2.5 shadow-2xl cursor-pointer"
             >
-              <span>Launch Neural Radar</span>
+              <span>Start Sharing</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 
             <button
               onClick={() => {
-                enterMesh();
+                enterWorkspace();
                 setActiveTab('Online');
                 if (!roomCode) handleCreateRoom();
               }}
@@ -460,9 +415,9 @@ export function App() {
                 <Layers className="w-4 h-4" />
               </div>
               <div>
-                <p className="text-xs font-bold text-white">3D BriarGlobe Discovery</p>
+                <p className="text-xs font-bold text-white">Instant Device Discovery</p>
                 <p className="text-[11px] text-slate-400">
-                  Interactive WebGL neural knots represent live nearby & room peers
+                  Interactive 3D nodes represent live nearby & online room peers
                 </p>
               </div>
             </div>
@@ -528,12 +483,12 @@ export function App() {
       {/* Top Navigation Bar */}
       <header className="sticky top-0 z-30 w-full mog-glass border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-          {/* Brand Logo (click to view Start Hero) */}
+          {/* Brand Logo */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowStartHero(true)}
               className="flex items-center gap-2.5 text-left group cursor-pointer"
-              title="Open CipherReach Welcome Screen"
+              title="Open Welcome Screen"
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 p-[1px] shadow-md shadow-sky-500/20 group-hover:scale-105 transition-transform">
                 <div className="w-full h-full bg-[#07090F] rounded-[11px] flex items-center justify-center">
@@ -541,14 +496,9 @@ export function App() {
                 </div>
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-display text-base font-bold tracking-tight text-white">
-                    MogShare
-                  </span>
-                  <span className="hidden md:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-400/30">
-                    NEURAL MESH
-                  </span>
-                </div>
+                <span className="font-display text-base font-bold tracking-tight text-white">
+                  MogShare
+                </span>
                 <p className="text-[11px] text-slate-400 hidden sm:block">
                   {localInfo.name} ({localInfo.platform})
                 </p>
@@ -567,7 +517,7 @@ export function App() {
               }`}
             >
               <Wifi className="w-3.5 h-3.5" />
-              <span>Local Mesh</span>
+              <span>Nearby</span>
             </button>
 
             <button
@@ -629,24 +579,12 @@ export function App() {
             </button>
 
             <button
-              onClick={handleExportProjectZip}
-              disabled={isExportingZip}
-              className="px-3 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-xs font-semibold text-sky-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Download full project source code (.ZIP) for GitHub"
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">
-                {isExportingZip ? 'Exporting…' : 'GitHub .ZIP'}
-              </span>
-            </button>
-
-            <button
               onClick={() => {
                 setDeviceNameInput(localInfo.name);
                 setIsSettingsOpen(true);
               }}
               className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
-              title="Node Settings"
+              title="Device Settings"
             >
               <Settings className="w-4 h-4" />
             </button>
@@ -658,7 +596,7 @@ export function App() {
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
         {(activeTab === 'share' || activeTab === 'Online') && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* LEFT COLUMN (7 cols): 3D BriarGlobe Radar + Online Room Controls */}
+            {/* LEFT COLUMN (7 cols): 3D Discovery Sphere + Online Room Controls */}
             <div className="lg:col-span-7 space-y-5">
               {(activeTab === 'Online' || roomCode) && (
                 <div className="mog-glass rounded-2xl p-5 border border-sky-400/25">
@@ -672,7 +610,7 @@ export function App() {
                         Share across different Wi-Fi or mobile networks
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Enter the same 6-character code on any device to join this private mesh.
+                        Enter the same 6-character code on any device to connect directly.
                       </p>
                     </div>
 
@@ -730,7 +668,7 @@ export function App() {
                 </div>
               )}
 
-              {/* 3D BriarGlobe Radar Scanner */}
+              {/* 3D Radar Scanner */}
               <div className="mog-glass rounded-2xl p-4 sm:p-5">
                 <RadarScanner
                   peers={peers}
@@ -755,10 +693,10 @@ export function App() {
                   <div>
                     <h2 className="text-base font-bold text-white flex items-center gap-2">
                       <Upload className="w-4 h-4 text-sky-400" />
-                      <span>Payload Staging Dock</span>
+                      <span>File Staging Dock</span>
                     </h2>
                     <p className="text-xs text-slate-400">
-                      Stage files or folders, then tap any node in the 3D sphere to beam
+                      Stage files or folders, then select any discovered device to send
                     </p>
                   </div>
                   {stagedFiles.length > 0 && (
@@ -814,7 +752,7 @@ export function App() {
                   >
                     <FolderUp className="w-5 h-5 text-indigo-400 mb-1.5 group-hover:scale-110 transition-transform" />
                     <span className="text-xs font-bold text-white">Select Folder</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">Batch directory beam</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">Batch directory send</span>
                   </button>
                 </div>
 
@@ -851,7 +789,7 @@ export function App() {
                     {peers.length > 0 && (
                       <div className="pt-2">
                         <p className="text-[11px] font-mono uppercase tracking-wider text-sky-400 mb-2">
-                          Instant Beam To Discovered Node:
+                          Send To Discovered Device:
                         </p>
                         <div className="flex flex-wrap gap-2">
                           {peers.map((p) => (
@@ -861,7 +799,7 @@ export function App() {
                               className="px-3 py-2 rounded-xl mog-btn-primary text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                             >
                               <Send className="w-3.5 h-3.5" />
-                              <span>Beam to {p.name}</span>
+                              <span>Send to {p.name}</span>
                             </button>
                           ))}
                         </div>
@@ -870,7 +808,7 @@ export function App() {
                   </div>
                 ) : (
                   <div className="py-4 text-center text-xs text-slate-400">
-                    Drag & drop files here, or click a peer directly to pick & send in one step.
+                    Drag & drop files here, or tap a device directly to pick & send in one step.
                   </div>
                 )}
               </div>
@@ -880,7 +818,7 @@ export function App() {
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Zap className="w-4 h-4 text-emerald-400" />
-                    <span>Live Telemetry & Recent Beams</span>
+                    <span>Active & Recent Transfers</span>
                   </h3>
                   {transfers.length > 0 && (
                     <button
@@ -894,7 +832,7 @@ export function App() {
 
                 {transfers.length === 0 ? (
                   <div className="py-6 text-center text-xs text-slate-400">
-                    No transfers in this session yet. Select a file and tap a node to start.
+                    No transfers in this session yet. Select a file and tap a device to start.
                   </div>
                 ) : (
                   <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
@@ -984,9 +922,9 @@ export function App() {
           <div className="mog-glass rounded-2xl p-6">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
               <div>
-                <h2 className="text-lg font-bold text-white">Transfer Ledger</h2>
+                <h2 className="text-lg font-bold text-white">Transfer History</h2>
                 <p className="text-xs text-slate-400">
-                  SHA-256 verified file transfers in this session & history
+                  SHA-256 verified file transfers in this session
                 </p>
               </div>
               {transfers.some((t) => t.status === 'completed' || t.status === 'failed') && (
@@ -1206,14 +1144,14 @@ export function App() {
         </div>
       )}
 
-      {/* Node Settings Modal */}
+      {/* Device Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
           <div className="w-full max-w-md rounded-2xl mog-glass border border-white/15 p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <Settings className="w-4 h-4 text-sky-400" />
-                <span>Node Identity & Preferences</span>
+                <span>Device Identity & Preferences</span>
               </h3>
               <button
                 onClick={() => setIsSettingsOpen(false)}
@@ -1225,7 +1163,7 @@ export function App() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Display Name on Radar
+                Display Name
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -1253,7 +1191,7 @@ export function App() {
                 <div>
                   <p className="text-xs font-bold text-white">Sound Effects</p>
                   <p className="text-[11px] text-slate-400">
-                    Audio chimes enabled by default for radar & transfers
+                    Audio chimes enabled by default for discovery & transfers
                   </p>
                 </div>
               </div>
@@ -1266,21 +1204,6 @@ export function App() {
                 }`}
               >
                 {soundEnabled ? 'Enabled' : 'Muted'}
-              </button>
-            </div>
-
-            <div className="pt-2 border-t border-white/10 flex items-center justify-between">
-              <button
-                onClick={handleExportProjectZip}
-                disabled={isExportingZip}
-                className="w-full py-2.5 px-4 rounded-xl mog-btn-secondary text-xs font-bold text-sky-300 flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Code2 className="w-4 h-4" />
-                <span>
-                  {isExportingZip
-                    ? 'Packaging Full Source Archive…'
-                    : 'Download Full Project (.ZIP) for GitHub'}
-                </span>
               </button>
             </div>
           </div>
